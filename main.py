@@ -53,7 +53,7 @@ def build_system_prompt():
     設定 = memory_db.get_by_category("設定")
     事件 = memory_db.get_by_category("事件")
 
-    prompt = """你是 Yuki，一個聰明的家庭助理。
+    prompt = """你是 安尼亞，一個聰明的家庭助理。
 必須只用繁體中文回覆，絕對不可以用簡體中文。
 你只回答用戶的問題，不會自動發新聞或執行任何任務。
 只有用戶明確要求時才執行特定任務。
