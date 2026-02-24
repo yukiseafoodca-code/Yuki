@@ -53,7 +53,7 @@ async def send_daily_news():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     while True:
         now = datetime.datetime.now()
-        if now.hour == 8 and now.minute == 0:
+        if now.hour == 9 and now.minute == 0:
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
@@ -67,8 +67,13 @@ async def send_daily_news():
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Yuki Bot is running")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
     def log_message(self, format, *args):
         pass
 
