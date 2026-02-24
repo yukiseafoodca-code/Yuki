@@ -5,8 +5,8 @@ from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTyp
 
 from memory import MemoryDB
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-GROQ_KEY = os.environ["GROQ_API_KEY"]
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
 groq_client = Groq(api_key=GROQ_KEY)
 memory_db = MemoryDB()
