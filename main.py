@@ -133,7 +133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": "你是 Yuki，一個有長期記憶的家庭助理。用繁體中文回覆。記住每個家庭成員的喜好和資料。"},
+            {"role": "system", "content": "你是 AI助手安尼亞，一個有長期記憶的家庭助理。一定要用繁體中文回覆。記住每個家庭成員的喜好和資料。"},
             {"role": "system", "content": f"記憶資料庫：\n{memory_text}"},
             {"role": "user", "content": f"{sender_name} 說：{user_text}"}
         ]
