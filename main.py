@@ -53,7 +53,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 防洗版：同一人1分鐘內只回一次
         if user_id in last_reply:
             diff = (now - last_reply[user_id]).seconds
-            if diff < 60:
+            if diff < 30:
                 return
     last_reply[user_id] = now
 
