@@ -3,6 +3,7 @@ import threading
 import asyncio
 import base64
 import requests
+import re
 import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from groq import Groq
@@ -53,7 +54,8 @@ def build_system_prompt():
     設定 = memory_db.get_by_category("設定")
     事件 = memory_db.get_by_category("事件")
 
-    prompt = """你是 安尼亞，一個聰明的家庭助理。
+    prompt = """你是安尼亞，一個聰明的家庭助理。
+你的名字是安尼亞，不是Yuki，不是其他名字。
 必須只用繁體中文回覆，絕對不可以用簡體中文。
 你只回答用戶的問題，不會自動發新聞或執行任何任務。
 只有用戶明確要求時才執行特定任務。
@@ -80,25 +82,24 @@ def parse_rss(url, count=5):
         for item in items[:count]:
             title = item.findtext("title") or ""
             desc = item.findtext("description") or ""
-            # 清除 HTML 標籤
-            import re
             desc = re.sub(r"<[^>]+>", "", desc).strip()
             articles.append({"title": title, "description": desc})
         return articles
-    except Exception as e:
+    except:
         return []
 
 def fetch_real_news():
     try:
-        # 加拿大重點新聞 RSS
+        # 加拿大重點新聞
         canada_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada", 5)
 
-        # Alberta/Edmonton 新聞 RSS
+        # Alberta/Edmonton 新聞
         alberta_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada-edmonton", 5)
-        if not alberta_articles:
-            alberta_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
+        if len(alberta_articles) < 3:
+            alberta_articles += parse_rss("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
+            alberta_articles = alberta_articles[:5]
 
-        # 整理成文字
+        # 整理文字
         canada_text = ""
         for i, a in enumerate(canada_articles, 1):
             canada_text += f"{i}. {a['title']}\n{a['description']}\n\n"
@@ -107,55 +108,65 @@ def fetch_real_news():
         for i, a in enumerate(alberta_articles, 1):
             alberta_text += f"{i}. {a['title']}\n{a['description']}\n\n"
 
-        if not canada_text:
+        if not canada_text.strip():
             canada_text = "暫時無法獲取加拿大新聞"
-        if not alberta_text:
+        if not alberta_text.strip():
             alberta_text = "暫時無法獲取 Alberta/Edmonton 新聞"
 
-        # 用 Groq 翻譯並擴展成繁體中文
+        # 翻譯並擴展
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{
                 "role": "user",
                 "content": f"""請將以下真實新聞翻譯並擴展成繁體中文。
+
 嚴格要求：
+- 加拿大新聞必須有5則，每則獨立編號
+- Alberta/Edmonton 新聞必須有5則，每則獨立編號
 - 每則新聞最少200字
-- 保持原有編號格式
+- 每則新聞格式如下：
+
+1. 【新聞標題】
+新聞詳細內容（最少200字，需要包含背景資料和影響）
+
 - 每則新聞之間空一行
 - 絕對不可以用簡體中文
 - 不要加 ** 或 ## 等符號
-- 標題用「標題：」開頭
-- 內容用「內容：」開頭
-- 根據標題和描述擴展更多相關背景資訊
+- 不要把多則新聞合併成一段
+- 每則新聞必須獨立完整
 
-🍁 加拿大重點新聞：
+🍁 加拿大重點新聞原文：
 {canada_text}
 
-📍 Alberta 或 Edmonton 新聞：
+📍 Alberta 或 Edmonton 新聞原文：
 {alberta_text}"""
             }]
         )
 
-        return response.choices[0].message.content
+        result = response.choices[0].message.content
+        return result
 
     except Exception as e:
         return f"❌ 新聞獲取失敗：{str(e)}"
 
-async def send_news_message(target, news_text):
-    chunks = []
-    while len(news_text) > 4000:
-        split_pos = news_text[:4000].rfind("\n\n")
-        if split_pos == -1:
-            split_pos = 4000
-        chunks.append(news_text[:split_pos])
-        news_text = news_text[split_pos:].strip()
-    chunks.append(news_text)
-
-    for chunk in chunks:
-        if hasattr(target, "reply_text"):
-            await target.reply_text(chunk)
+async def send_news_message(target, news_text, bot=None):
+    parts = []
+    current = ""
+    for paragraph in news_text.split("\n\n"):
+        if len(current) + len(paragraph) + 2 > 4000:
+            parts.append(current.strip())
+            current = paragraph
         else:
-            await target.send_message(chat_id=MY_CHAT_ID, text=chunk)
+            current += "\n\n" + paragraph
+    if current.strip():
+        parts.append(current.strip())
+
+    for part in parts:
+        if part:
+            if bot:
+                await bot.send_message(chat_id=MY_CHAT_ID, text=part)
+            else:
+                await target.reply_text(part)
 
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
@@ -291,7 +302,7 @@ async def send_daily_news():
         if now.hour == 9 and now.minute == 0 and not sent_today:
             await bot.send_message(chat_id=MY_CHAT_ID, text="📰 早晨新聞來了，請稍等約30秒...")
             news = fetch_real_news()
-            await send_news_message(bot, news)
+            await send_news_message(None, news, bot=bot)
             sent_today = True
         if now.hour != 9:
             sent_today = False
@@ -326,7 +337,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_message))
     loop = asyncio.get_event_loop()
     loop.create_task(send_daily_news())
-    print("Yuki Bot is running")
+    print("安尼亞 Bot is running")
     app.run_polling()
 
 if __name__ == "__main__":
