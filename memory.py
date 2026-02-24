@@ -15,9 +15,16 @@ class MemoryDB:
             "sender_name": sender_name
         }).execute()
 
+    def get_by_category(self, category):
+        response = self.client.table("memory_v2").select("content, sender_name").eq("category", category).execute()
+        return [f"{r['sender_name']}: {r['content']}" for r in response.data]
+
     def get_all_memory(self):
         response = self.client.table("memory_v2").select("category, content, sender_name").execute()
         return [f"[{r['category']}] {r['sender_name']}: {r['content']}" for r in response.data]
+
+    def forget_all(self):
+        self.client.table("memory_v2").delete().neq("id", 0).execute()
 
     def set_preference(self, key, value):
         self.client.table("preferences").upsert({"key": key, "value": value}).execute()
