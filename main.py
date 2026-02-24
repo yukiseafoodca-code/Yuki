@@ -1,6 +1,7 @@
 import os
 import threading
 import asyncio
+import base64
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from groq import Groq
 from telegram import Update, Bot
@@ -16,7 +17,6 @@ TRIGGER_KEYWORD = "安尼亞"
 groq_client = Groq(api_key=GROQ_API_KEY)
 memory_db = MemoryDB()
 
-# 防洗版：記錄每個用戶最後回覆時間
 last_reply = {}
 
 def get_category(text):
@@ -35,35 +35,97 @@ def is_important(text):
     keywords = ["我叫", "我是", "我喜歡", "我討厭", "我住", "記住", "設定", "他叫", "她叫", "家人", "今天", "發生"]
     return any(kw in text for kw in keywords)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message or not message.text:
-        return
-
-    user_text = message.text
-    sender_name = message.from_user.first_name or "未知"
-    chat_type = message.chat.type
-    user_id = message.from_user.id
+def check_rate_limit(user_id, chat_type):
     now = datetime.datetime.now()
-
-    # 群組模式：只回應關鍵字
     if chat_type in ["group", "supergroup"]:
-        if TRIGGER_KEYWORD not in user_text:
-            return
-        # 防洗版：同一人1分鐘內只回一次
         if user_id in last_reply:
             diff = (now - last_reply[user_id]).seconds
             if diff < 30:
-                return
+                return False
     last_reply[user_id] = now
+    return True
 
-    # 設定指令
-    if user_text.startswith("設定:"):
-        parts = user_text[3:].split("=")
-        if len(parts) == 2:
-            memory_db.set_preference(parts[0].strip(), parts[1].strip())
-            await message.reply_text(f"✅ 已記住偏好：{parts[0].strip()} = {parts[1].strip()}")
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    sender_name = message.from_user.first_name or "未知"
+    chat_type = message.chat.type
+    user_id = message.from_user.id
+
+    # 語音訊息處理
+    if message.voice:
+        if chat_type in ["group", "supergroup"]:
             return
+        if not check_rate_limit(user_id, chat_type):
+            return
+        try:
+            voice_file = await message.voice.get_file()
+            voice_bytes = await voice_file.download_as_bytearray()
+            with open("/tmp/voice.ogg", "wb") as f:
+                f.write(voice_bytes)
+            with open("/tmp/voice.ogg", "rb") as f:
+                transcription = groq_client.audio.transcriptions.create(
+                    file=("voice.ogg", f.read()),
+                    model="whisper-large-v3",
+                    language="zh"
+                )
+            user_text = transcription.text
+            await message.reply_text(f"🎤 你說：{user_text}")
+        except Exception as e:
+            await message.reply_text("❌ 語音辨識失敗，請再試一次")
+            return
+
+    # 圖片處理
+    elif message.photo:
+        if chat_type in ["group", "supergroup"]:
+            return
+        if not check_rate_limit(user_id, chat_type):
+            return
+        try:
+            photo = message.photo[-1]
+            photo_file = await photo.get_file()
+            photo_bytes = await photo_file.download_as_bytearray()
+            base64_image = base64.b64encode(photo_bytes).decode("utf-8")
+            caption = message.caption or "請描述這張圖片"
+            response = groq_client.chat.completions.create(
+                model="llama-3.2-11b-vision-preview",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"{caption}，請用繁體中文回答"},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                        ]
+                    }
+                ]
+            )
+            reply = response.choices[0].message.content
+            await message.reply_text(f"🖼️ {reply}")
+        except Exception as e:
+            await message.reply_text("❌ 圖片辨識失敗，請再試一次")
+        return
+
+    # 文字訊息處理
+    elif message.text:
+        user_text = message.text
+
+        if chat_type in ["group", "supergroup"]:
+            if TRIGGER_KEYWORD not in user_text:
+                return
+
+        if not check_rate_limit(user_id, chat_type):
+            return
+
+        if user_text.startswith("設定:"):
+            parts = user_text[3:].split("=")
+            if len(parts) == 2:
+                memory_db.set_preference(parts[0].strip(), parts[1].strip())
+                await message.reply_text(f"✅ 已記住偏好：{parts[0].strip()} = {parts[1].strip()}")
+                return
+    else:
+        return
 
     memories = memory_db.get_all_memory()
     memory_text = "\n".join(memories[-20:])
@@ -122,9 +184,11 @@ def main():
     threading.Thread(target=run_web, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_message))
+    print("Yuki Bot is running")
     loop = asyncio.get_event_loop()
     loop.create_task(send_daily_news())
-    print("Yuki Bot is running")
     app.run_polling()
 
 if __name__ == "__main__":
