@@ -3,6 +3,7 @@ import threading
 import asyncio
 import base64
 import requests
+import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from groq import Groq
 from telegram import Update, Bot
@@ -13,7 +14,6 @@ import datetime
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 MY_CHAT_ID = os.environ["MY_CHAT_ID"]
-NEWS_API_KEY = os.environ["NEWS_API_KEY"]
 TRIGGER_KEYWORD = "安尼亞"
 
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -70,54 +70,63 @@ def build_system_prompt():
 
     return prompt
 
+def parse_rss(url, count=5):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        res = requests.get(url, headers=headers, timeout=10)
+        root = ET.fromstring(res.content)
+        items = root.findall(".//item")
+        articles = []
+        for item in items[:count]:
+            title = item.findtext("title") or ""
+            desc = item.findtext("description") or ""
+            # 清除 HTML 標籤
+            import re
+            desc = re.sub(r"<[^>]+>", "", desc).strip()
+            articles.append({"title": title, "description": desc})
+        return articles
+    except Exception as e:
+        return []
+
 def fetch_real_news():
     try:
-        # 加拿大重點新聞
-        canada_url = (
-            f"https://newsapi.org/v2/top-headlines"
-            f"?country=ca&pageSize=5&apiKey={NEWS_API_KEY}"
-        )
-        canada_res = requests.get(canada_url).json()
-        canada_articles = canada_res.get("articles", [])
+        # 加拿大重點新聞 RSS
+        canada_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada", 5)
 
-        # Alberta/Edmonton 新聞
-        alberta_url = (
-            f"https://newsapi.org/v2/everything"
-            f"?q=Alberta+OR+Edmonton&language=en&sortBy=publishedAt&pageSize=5&apiKey={NEWS_API_KEY}"
-        )
-        alberta_res = requests.get(alberta_url).json()
-        alberta_articles = alberta_res.get("articles", [])
+        # Alberta/Edmonton 新聞 RSS
+        alberta_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada-edmonton", 5)
+        if not alberta_articles:
+            alberta_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
 
-        # 整理加拿大新聞
+        # 整理成文字
         canada_text = ""
         for i, a in enumerate(canada_articles, 1):
-            title = a.get("title", "無標題")
-            desc = a.get("description") or ""
-            content = a.get("content") or ""
-            full = desc + " " + content
-            canada_text += f"{i}. {title}\n{full}\n\n"
+            canada_text += f"{i}. {a['title']}\n{a['description']}\n\n"
 
-        # 整理 Alberta/Edmonton 新聞
         alberta_text = ""
         for i, a in enumerate(alberta_articles, 1):
-            title = a.get("title", "無標題")
-            desc = a.get("description") or ""
-            content = a.get("content") or ""
-            full = desc + " " + content
-            alberta_text += f"{i}. {title}\n{full}\n\n"
+            alberta_text += f"{i}. {a['title']}\n{a['description']}\n\n"
 
-        # 用 Groq 翻譯並擴展成繁體中文，每則最少200字
+        if not canada_text:
+            canada_text = "暫時無法獲取加拿大新聞"
+        if not alberta_text:
+            alberta_text = "暫時無法獲取 Alberta/Edmonton 新聞"
+
+        # 用 Groq 翻譯並擴展成繁體中文
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{
                 "role": "user",
-                "content": f"""請將以下新聞翻譯並擴展成繁體中文。
-要求：
+                "content": f"""請將以下真實新聞翻譯並擴展成繁體中文。
+嚴格要求：
 - 每則新聞最少200字
-- 保持原有編號
+- 保持原有編號格式
 - 每則新聞之間空一行
-- 不可以用簡體中文
+- 絕對不可以用簡體中文
 - 不要加 ** 或 ## 等符號
+- 標題用「標題：」開頭
+- 內容用「內容：」開頭
+- 根據標題和描述擴展更多相關背景資訊
 
 🍁 加拿大重點新聞：
 {canada_text}
@@ -126,10 +135,27 @@ def fetch_real_news():
 {alberta_text}"""
             }]
         )
+
         return response.choices[0].message.content
 
     except Exception as e:
         return f"❌ 新聞獲取失敗：{str(e)}"
+
+async def send_news_message(target, news_text):
+    chunks = []
+    while len(news_text) > 4000:
+        split_pos = news_text[:4000].rfind("\n\n")
+        if split_pos == -1:
+            split_pos = 4000
+        chunks.append(news_text[:split_pos])
+        news_text = news_text[split_pos:].strip()
+    chunks.append(news_text)
+
+    for chunk in chunks:
+        if hasattr(target, "reply_text"):
+            await target.reply_text(chunk)
+        else:
+            await target.send_message(chat_id=MY_CHAT_ID, text=chunk)
 
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
@@ -137,22 +163,16 @@ async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 記憶庫是空的")
         return
     text = "📚 記憶庫：\n\n" + "\n".join(memories)
-    await update.message.reply_text(text)
+    await update.message.reply_text(text[:4000])
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memory_db.forget_all()
     await update.message.reply_text("🗑️ 所有記憶已清除")
 
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📰 正在獲取最新新聞，請稍等...")
+    await update.message.reply_text("📰 正在獲取最新真實新聞，請稍等約30秒...")
     news = fetch_real_news()
-    # Telegram 訊息有長度限制，分段發送
-    if len(news) > 4000:
-        mid = len(news) // 2
-        await update.message.reply_text(news[:mid])
-        await update.message.reply_text(news[mid:])
-    else:
-        await update.message.reply_text(news)
+    await send_news_message(update.message, news)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -232,33 +252,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(f"✅ 已記住偏好：{parts[0].strip()} = {parts[1].strip()}")
                 return
 
-        # 明確要求新聞
-        if any(kw in user_text for kw in ["發新聞", "新聞", "今日新聞"]):
-            await message.reply_text("📰 正在獲取最新新聞，請稍等...")
-            news = fetch_real_news()
-            if len(news) > 4000:
-                mid = len(news) // 2
-                await message.reply_text(news[:mid])
-                await message.reply_text(news[mid:])
-            else:
-                await message.reply_text(news)
-            # 記錄用戶新聞要求
-            memory_db.add_memory(user_text, category="設定", sender_name=sender_name)
+        # 強制記憶
+        if any(kw in user_text for kw in ["記錄", "記住"]):
+            memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
+            await message.reply_text("✅ 已記錄！")
             return
 
-        # 強制記憶
-        if any(kw in user_text for kw in ["記錄", "記住", "記住我"]):
-            memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
-            system_prompt = build_system_prompt()
-            response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"{sender_name} 說：{user_text}"}
-                ]
-            )
-            reply = response.choices[0].message.content
-            await message.reply_text("✅ 已記錄！\n\n" + reply)
+        # 明確要求新聞
+        if any(kw in user_text for kw in ["發新聞", "新聞", "今日新聞"]):
+            await message.reply_text("📰 正在獲取最新真實新聞，請稍等約30秒...")
+            news = fetch_real_news()
+            await send_news_message(message, news)
             return
 
         # 一般對話
@@ -272,7 +276,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = response.choices[0].message.content
 
-        # 自動記憶重要資訊
         if is_important(user_text):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
 
@@ -286,14 +289,9 @@ async def send_daily_news():
     while True:
         now = datetime.datetime.now()
         if now.hour == 9 and now.minute == 0 and not sent_today:
-            await bot.send_message(chat_id=MY_CHAT_ID, text="📰 正在獲取早晨新聞，請稍等...")
+            await bot.send_message(chat_id=MY_CHAT_ID, text="📰 早晨新聞來了，請稍等約30秒...")
             news = fetch_real_news()
-            if len(news) > 4000:
-                mid = len(news) // 2
-                await bot.send_message(chat_id=MY_CHAT_ID, text=news[:mid])
-                await bot.send_message(chat_id=MY_CHAT_ID, text=news[mid:])
-            else:
-                await bot.send_message(chat_id=MY_CHAT_ID, text=news)
+            await send_news_message(bot, news)
             sent_today = True
         if now.hour != 9:
             sent_today = False
