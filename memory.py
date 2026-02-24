@@ -14,3 +14,12 @@ class MemoryDB:
     def get_all_memory(self):
         response = self.client.table("memory").select("memory").execute()
         return [row["memory"] for row in response.data]
+
+    def set_preference(self, key, value):
+        self.client.table("preferences").upsert({"key": key, "value": value}).execute()
+
+    def get_preference(self, key):
+        response = self.client.table("preferences").select("value").eq("key", key).execute()
+        if response.data:
+            return response.data[0]["value"]
+        return None
