@@ -8,7 +8,7 @@ from memory import MemoryDB
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
-groq_client = Groq(api_key=GROQ_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
 memory_db = MemoryDB()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
