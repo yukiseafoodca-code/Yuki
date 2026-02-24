@@ -2,6 +2,7 @@ import os
 import threading
 import asyncio
 import base64
+import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from groq import Groq
 from telegram import Update, Bot
@@ -12,6 +13,7 @@ import datetime
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 MY_CHAT_ID = os.environ["MY_CHAT_ID"]
+NEWS_API_KEY = os.environ["NEWS_API_KEY"]
 TRIGGER_KEYWORD = "安尼亞"
 
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -44,7 +46,7 @@ def check_rate_limit(user_id, chat_type):
     last_reply[user_id] = now
     return True
 
-def build_system_prompt(memories):
+def build_system_prompt():
     人物 = memory_db.get_by_category("人物")
     喜好 = memory_db.get_by_category("喜好")
     設定 = memory_db.get_by_category("設定")
@@ -57,17 +59,64 @@ def build_system_prompt(memories):
 
 """
     if 人物:
-        prompt += f"【人物資料】\n" + "\n".join(人物) + "\n\n"
+        prompt += "【人物資料】\n" + "\n".join(人物) + "\n\n"
     if 喜好:
-        prompt += f"【喜好】\n" + "\n".join(喜好) + "\n\n"
+        prompt += "【喜好】\n" + "\n".join(喜好) + "\n\n"
     if 設定:
-        prompt += f"【設定】\n" + "\n".join(設定) + "\n\n"
+        prompt += "【設定】\n" + "\n".join(設定) + "\n\n"
     if 事件:
-        prompt += f"【近期事件】\n" + "\n".join(事件[-5:]) + "\n\n"
+        prompt += "【近期事件】\n" + "\n".join(事件[-5:]) + "\n\n"
 
     return prompt
 
-# 指令：/memory
+def fetch_real_news():
+    try:
+        # 國際新聞
+        intl_url = (
+            f"https://newsapi.org/v2/top-headlines"
+            f"?language=zh&pageSize=5&apiKey={NEWS_API_KEY}"
+        )
+        intl_res = requests.get(intl_url).json()
+        intl_articles = intl_res.get("articles", [])
+
+        # 加拿大 Alberta/Edmonton 新聞
+        canada_url = (
+            f"https://newsapi.org/v2/everything"
+            f"?q=Alberta+OR+Edmonton&language=en&sortBy=publishedAt&pageSize=5&apiKey={NEWS_API_KEY}"
+        )
+        canada_res = requests.get(canada_url).json()
+        canada_articles = canada_res.get("articles", [])
+
+        news_text = "🌍 國際新聞：\n\n"
+        if intl_articles:
+            for i, a in enumerate(intl_articles, 1):
+                title = a.get("title", "無標題")
+                desc = a.get("description") or "暫無內容"
+                url = a.get("url", "")
+                news_text += f"{i}. {title}\n{desc}\n{url}\n\n"
+        else:
+            # 如果中文新聞不夠，用英文
+            intl_url2 = f"https://newsapi.org/v2/top-headlines?language=en&pageSize=5&apiKey={NEWS_API_KEY}"
+            intl_res2 = requests.get(intl_url2).json()
+            intl_articles2 = intl_res2.get("articles", [])
+            for i, a in enumerate(intl_articles2, 1):
+                title = a.get("title", "無標題")
+                desc = a.get("description") or "暫無內容"
+                url = a.get("url", "")
+                news_text += f"{i}. {title}\n{desc}\n{url}\n\n"
+
+        news_text += "🍁 Alberta/Edmonton 新聞：\n\n"
+        for i, a in enumerate(canada_articles, 1):
+            title = a.get("title", "無標題")
+            desc = a.get("description") or "暫無內容"
+            url = a.get("url", "")
+            news_text += f"{i}. {title}\n{desc}\n{url}\n\n"
+
+        return news_text
+
+    except Exception as e:
+        return f"❌ 新聞獲取失敗：{str(e)}"
+
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
     if not memories:
@@ -76,20 +125,14 @@ async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📚 記憶庫：\n\n" + "\n".join(memories)
     await update.message.reply_text(text)
 
-# 指令：/forget
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memory_db.forget_all()
     await update.message.reply_text("🗑️ 所有記憶已清除")
 
-# 取得新聞
-async def fetch_news():
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "user", "content": "請用繁體中文提供今天5條重要國際新聞和5條加拿大Alberta或Edmonton重點新聞，每條新聞要有標題和簡短內容，每條之間空一行。"}
-        ]
-    )
-    return response.choices[0].message.content
+async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📰 正在獲取最新新聞...")
+    news = fetch_real_news()
+    await update.message.reply_text(news)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -121,7 +164,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text(f"🎤 你說：{user_text}")
         except:
             await message.reply_text("❌ 語音辨識失敗，請再試一次")
-            return
+        return
 
     # 圖片訊息
     elif message.photo:
@@ -161,7 +204,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not check_rate_limit(user_id, chat_type):
             return
 
-        # 設定指令
         if user_text.startswith("設定:"):
             parts = user_text[3:].split("=")
             if len(parts) == 2:
@@ -169,14 +211,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(f"✅ 已記住偏好：{parts[0].strip()} = {parts[1].strip()}")
                 return
 
-        # 明確要求新聞
         if any(kw in user_text for kw in ["發新聞", "新聞", "今日新聞"]):
-            news = await fetch_news()
-            await message.reply_text(f"📰 今日新聞：\n\n{news}")
+            await message.reply_text("📰 正在獲取最新新聞...")
+            news = fetch_real_news()
+            await message.reply_text(news)
             return
 
-        # 一般對話
-        system_prompt = build_system_prompt(memory_db.get_all_memory())
+        system_prompt = build_system_prompt()
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -190,20 +231,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
 
         await message.reply_text(reply)
-    else:
-        return
 
-# 每天早上9點自動發新聞
 async def send_daily_news():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     sent_today = False
     while True:
         now = datetime.datetime.now()
         if now.hour == 9 and now.minute == 0 and not sent_today:
-            news = await fetch_news()
+            news = fetch_real_news()
             await bot.send_message(chat_id=MY_CHAT_ID, text=f"📰 早晨新聞：\n\n{news}")
             sent_today = True
-        if now.hour == 9 and now.minute > 0:
+        if now.hour != 9:
             sent_today = False
         await asyncio.sleep(60)
 
@@ -230,6 +268,7 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("forget", cmd_forget))
+    app.add_handler(CommandHandler("news", cmd_news))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_message))
