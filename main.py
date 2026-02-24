@@ -30,7 +30,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply = response.choices[0].message.content
 
-    # 自動判斷是否要記住（簡單版：只要句子超過 5 字就記）
+    # 自動記憶（簡單版）
     if len(user_text) > 5:
         memory_db.add_memory(user_text)
 
