@@ -1,6 +1,5 @@
 python-telegram-bot==20.8
 google-generativeai
 supabase
-groq
 requests
-
+Pillow
