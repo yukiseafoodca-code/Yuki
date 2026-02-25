@@ -58,7 +58,6 @@ def build_system_prompt():
 你的名字是安尼亞，不是Yuki，不是其他名字。
 必須只用繁體中文回覆，絕對不可以用簡體中文。
 嚴格禁止：不論記憶庫裡有什麼設定，你絕對不可以自己生成或提供任何新聞內容。
-新聞只能通過程式自動獲取，不能由你自己編寫。
 你只簡短回答用戶的問題，不要主動提及記憶庫內容或解釋你的設定。
 
 """
@@ -106,22 +105,16 @@ def translate_news(articles, section_name):
 嚴格要求：
 - 必須保留全部5則新聞，每則獨立
 - 每則新聞最少200字
-- 格式如下（照這個格式，不要改變）：
+- 格式：
 
 1. 新聞標題
 新聞詳細內容（最少200字）
 
-2. 新聞標題
-新聞詳細內容（最少200字）
-
-（如此類推直到第5則）
-
-- 每則新聞之間空一行
+- 每則之間空一行
 - 絕對不可以用簡體中文
 - 不要加 ** 或 ## 等符號
-- 不要把多則新聞合併
 
-原文新聞：
+原文：
 {news_text}"""
         }]
     )
@@ -129,16 +122,12 @@ def translate_news(articles, section_name):
 
 def fetch_real_news():
     try:
-        # 加拿大重點新聞
         canada_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada", 5)
-
-        # Alberta/Edmonton 新聞
         alberta_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada-edmonton", 5)
         if len(alberta_articles) < 3:
             extra = parse_rss("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
             alberta_articles = (alberta_articles + extra)[:5]
 
-        # 分別翻譯
         canada_translated = translate_news(canada_articles, "加拿大新聞")
         alberta_translated = translate_news(alberta_articles, "Alberta/Edmonton 新聞")
 
@@ -146,7 +135,6 @@ def fetch_real_news():
         alberta_result = "📍 Alberta 或 Edmonton 新聞\n\n" + alberta_translated
 
         return canada_result, alberta_result
-
     except Exception as e:
         return f"❌ 新聞獲取失敗：{str(e)}", ""
 
@@ -173,13 +161,13 @@ async def send_news(target, bot=None):
     await asyncio.sleep(2)
     await send_chunk(alberta_news)
 
+# 指令處理
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
     if not memories:
         await update.message.reply_text("📭 記憶庫是空的")
         return
-    text = "📚 記憶庫：\n\n" + "\n".join(memories)
-    await update.message.reply_text(text[:4000])
+    await update.message.reply_text("📚 記憶庫：\n\n" + "\n".join(memories))
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memory_db.forget_all()
@@ -189,6 +177,62 @@ async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📰 正在獲取最新真實新聞，請稍等約30秒...")
     await send_news(update.message)
 
+async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    events = memory_db.get_upcoming_events(30)
+    if not events:
+        await update.message.reply_text("📅 未來30天沒有行程")
+        return
+    text = "📅 未來30天行程：\n\n"
+    for e in events:
+        text += f"📌 {e['event_date']} [{e['category']}] {e['title']}\n"
+    await update.message.reply_text(text)
+
+async def cmd_shopping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    items = memory_db.get_shopping_list()
+    if not items:
+        await update.message.reply_text("🛒 購物清單是空的")
+        return
+    text = "🛒 購物清單：\n\n"
+    for i, item in enumerate(items, 1):
+        text += f"{i}. {item['item']} x{item['quantity']} （{item['added_by']}）\n"
+    await update.message.reply_text(text)
+
+async def cmd_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    expenses = memory_db.get_monthly_expenses()
+    if not expenses:
+        await update.message.reply_text("💰 本月沒有記帳記錄")
+        return
+    total = sum(float(e['amount']) for e in expenses)
+    categories = {}
+    for e in expenses:
+        cat = e['category']
+        categories[cat] = categories.get(cat, 0) + float(e['amount'])
+    text = f"💰 本月支出摘要：\n總計：${total:.2f}\n\n"
+    for cat, amount in categories.items():
+        text += f"• {cat}：${amount:.2f}\n"
+    text += "\n詳細記錄：\n"
+    for e in expenses:
+        text += f"• {e['expense_date']} [{e['category']}] {e['description']} ${e['amount']}\n"
+    await update.message.reply_text(text)
+
+async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.reply_to_message and update.message.reply_to_message.text:
+        text_to_summarize = update.message.reply_to_message.text
+    elif context.args:
+        text_to_summarize = " ".join(context.args)
+    else:
+        await update.message.reply_text("請回覆一條訊息並輸入 /summary，或 /summary 加上要摘要的文字")
+        return
+
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{
+            "role": "user",
+            "content": f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{text_to_summarize}"
+        }]
+    )
+    await update.message.reply_text("📝 摘要：\n\n" + response.choices[0].message.content)
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
@@ -197,6 +241,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_name = message.from_user.first_name or "未知"
     chat_type = message.chat.type
     user_id = message.from_user.id
+
+    # 自動摘要長訊息（超過500字）
+    if message.text and len(message.text) > 500:
+        if chat_type in ["group", "supergroup"]:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{
+                    "role": "user",
+                    "content": f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{message.text}"
+                }]
+            )
+            await message.reply_text("📝 自動摘要：\n\n" + response.choices[0].message.content)
+            return
 
     # 語音訊息
     if message.voice:
@@ -273,7 +330,85 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("✅ 已記錄！")
             return
 
-        # 明確要求新聞（收窄關鍵字）
+        # 新增行事曆
+        if "加入行程" in user_text or "新增行程" in user_text:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{
+                    "role": "user",
+                    "content": f"""從以下訊息提取行程資料，回傳 JSON 格式：
+{{"title": "標題", "category": "分類(家庭活動/醫生預約/垃圾回收/上課提醒/生日)", "date": "YYYY-MM-DD", "reminder_days": 提前提醒天數}}
+
+訊息：{user_text}
+今天日期：{datetime.date.today()}
+
+只回傳 JSON，不要其他文字。"""
+                }]
+            )
+            try:
+                import json
+                data = json.loads(response.choices[0].message.content)
+                memory_db.add_event(
+                    title=data["title"],
+                    category=data["category"],
+                    event_date=data["date"],
+                    reminder_days=data.get("reminder_days", 1),
+                    created_by=sender_name
+                )
+                await message.reply_text(f"📅 已加入行程：{data['date']} {data['title']}")
+            except:
+                await message.reply_text("❌ 無法識別行程格式，請嘗試：加入行程 2024-03-15 醫生預約")
+            return
+
+        # 新增購物清單
+        if "買" in user_text or "購物" in user_text or "加入清單" in user_text:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{
+                    "role": "user",
+                    "content": f"""從以下訊息提取購物項目，回傳 JSON 格式：
+{{"items": [{{"item": "物品名稱", "quantity": "數量"}}]}}
+
+訊息：{user_text}
+
+只回傳 JSON，不要其他文字。"""
+                }]
+            )
+            try:
+                import json
+                data = json.loads(response.choices[0].message.content)
+                for item in data["items"]:
+                    memory_db.add_shopping(item["item"], item.get("quantity", "1"), sender_name)
+                items_text = "、".join([i["item"] for i in data["items"]])
+                await message.reply_text(f"🛒 已加入購物清單：{items_text}")
+            except:
+                await message.reply_text("❌ 無法識別購物項目")
+            return
+
+        # 記帳
+        if "支出" in user_text or "花了" in user_text or "記帳" in user_text:
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{
+                    "role": "user",
+                    "content": f"""從以下訊息提取支出資料，回傳 JSON 格式：
+{{"amount": 金額數字, "category": "分類(食物/交通/娛樂/醫療/購物/其他)", "description": "描述"}}
+
+訊息：{user_text}
+
+只回傳 JSON，不要其他文字。"""
+                }]
+            )
+            try:
+                import json
+                data = json.loads(response.choices[0].message.content)
+                memory_db.add_expense(data["amount"], data["category"], data["description"], sender_name)
+                await message.reply_text(f"💰 已記帳：{data['category']} ${data['amount']} - {data['description']}")
+            except:
+                await message.reply_text("❌ 無法識別支出格式，請嘗試：記帳 食物 $50 超市購物")
+            return
+
+        # 明確要求新聞
         if any(kw in user_text for kw in ["發新聞", "今日新聞", "要新聞", "給我新聞", "看新聞"]):
             await message.reply_text("📰 正在獲取最新真實新聞，請稍等約30秒...")
             await send_news(message)
@@ -296,6 +431,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(reply)
     else:
         return
+
+async def check_reminders():
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    while True:
+        now = datetime.datetime.now()
+        if now.hour == 8 and now.minute == 0:
+            events = memory_db.get_upcoming_events(7)
+            if events:
+                text = "⏰ 本週提醒：\n\n"
+                for e in events:
+                    text += f"📌 {e['event_date']} [{e['category']}] {e['title']}\n"
+                await bot.send_message(chat_id=MY_CHAT_ID, text=text)
+        await asyncio.sleep(60)
 
 async def send_daily_news():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -334,11 +482,16 @@ def main():
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("forget", cmd_forget))
     app.add_handler(CommandHandler("news", cmd_news))
+    app.add_handler(CommandHandler("calendar", cmd_calendar))
+    app.add_handler(CommandHandler("shopping", cmd_shopping))
+    app.add_handler(CommandHandler("expenses", cmd_expenses))
+    app.add_handler(CommandHandler("summary", cmd_summary))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_message))
     loop = asyncio.get_event_loop()
     loop.create_task(send_daily_news())
+    loop.create_task(check_reminders())
     print("安尼亞 Bot is running")
     app.run_polling()
 
