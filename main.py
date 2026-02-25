@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import google.generativeai as genai
 import google.api_core.exceptions
+from google.generativeai.types import Tool, GoogleSearchRetrieval
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from memory import MemoryDB
@@ -43,10 +44,16 @@ def get_stable_model():
 
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
-search_model = genai.GenerativeModel(
-    model_name=MODEL_NAME,
-    tools=[{"google_search": {}}]
-)
+
+try:
+    search_model = genai.GenerativeModel(
+        model_name=MODEL_NAME,
+        tools=[Tool(google_search_retrieval=GoogleSearchRetrieval())]
+    )
+    print("Google Search 工具已啟用")
+except Exception as e:
+    print(f"Google Search 工具啟用失敗，使用普通模型: {e}")
+    search_model = chat_model
 
 memory_db = MemoryDB()
 last_reply = {}
@@ -80,12 +87,12 @@ def check_rate_limit(user_id, chat_type):
 
 def needs_search(text):
     search_triggers = [
-        "最新", "現在", "今天", "今日", "最近", "近期",
+        "最新", "現在", "今日", "最近", "近期",
         "幾多", "幾錢", "價格", "股價", "匯率",
         "天氣", "溫度", "預報",
         "誰是", "是誰", "哪裡", "在哪",
         "公投", "選舉", "政策", "法例", "新政",
-        "消息", "發生", "事件", "新聞"
+        "消息", "事件", "新聞"
     ]
     return any(kw in text for kw in search_triggers)
 
