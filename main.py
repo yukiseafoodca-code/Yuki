@@ -22,6 +22,16 @@ TRIGGER_KEYWORD = "安尼亞"
 
 genai.configure(api_key=GEMINI_API_KEY)
 
+# 🔍 啟用自動 Google Search 的關鍵字
+SEARCH_KEYWORDS = [
+    "最新", "新聞", "消息", "發生什麼", "現在怎樣",
+    "公投", "選舉", "天氣", "股市", "災情", "事故",
+    "Saskatchewan", "亞省", "阿省", "加拿大新聞"
+]
+
+def need_search(text: str) -> bool:
+    return any(kw in text for kw in SEARCH_KEYWORDS)
+
 def get_stable_model():
     try:
         available = []
@@ -30,23 +40,36 @@ def get_stable_model():
                 available.append(m.name)
                 print(f"可用模型: {m.name}")
         
-        # 按優先順序嘗試
-        for preferred in ['models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash', 
-                          'models/gemini-1.0-pro', 'models/gemini-pro']:
+        # 優先使用支援 tools / search 的 1.5 系列
+        for preferred in [
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-1.5-flash',
+            'models/gemini-1.5-pro-latest',
+            'models/gemini-1.5-pro',
+            'models/gemini-1.0-pro',
+            'models/gemini-pro'
+        ]:
             if preferred in available:
                 print(f"✅ 使用: {preferred}")
-                return genai.GenerativeModel(model_name=preferred)
+                return genai.GenerativeModel(
+                    model_name=preferred,
+                    tools=[{"google_search": {}}]
+                )
         
-        # 用第一個可用的
         if available:
             print(f"✅ 使用第一個可用: {available[0]}")
-            return genai.GenerativeModel(model_name=available[0])
+            return genai.GenerativeModel(
+                model_name=available[0],
+                tools=[{"google_search": {}}]
+            )
             
     except Exception as e:
         print(f"⚠️ 查找失敗: {e}")
     
-    return genai.GenerativeModel('gemini-pro')
-
+    return genai.GenerativeModel(
+        model_name='gemini-pro',
+        tools=[{"google_search": {}}]
+    )
 
 gemini_model = get_stable_model()
 memory_db = MemoryDB()
@@ -81,7 +104,11 @@ def check_rate_limit(user_id, chat_type):
 
 def gemini_chat(prompt):
     try:
-        response = gemini_model.generate_content(prompt)
+        enable_search = need_search(prompt)
+        response = gemini_model.generate_content(
+            prompt,
+            tool_config={"google_search": {"enable": enable_search}}
+        )
         return response.text
     except google.api_core.exceptions.ResourceExhausted:
         return "❌ 安尼亞太忙了，請等60秒再試"
@@ -99,7 +126,6 @@ def build_system_prompt():
 必須使用繁體中文回覆，絕對禁止使用簡體中文。
 不可以自己生成新聞內容。
 回答要簡短直接。
-
 """
     if 人物:
         prompt += "【人物資料】\n" + "\n".join(人物) + "\n\n"
@@ -111,6 +137,9 @@ def build_system_prompt():
         prompt += "【近期事件】\n" + "\n".join(事件[-5:]) + "\n\n"
     return prompt
 
+# ---------------------------------------------------------
+# RSS / 新聞
+# ---------------------------------------------------------
 def parse_rss(url, count=5):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -165,7 +194,7 @@ async def send_news(target, bot=None):
             split_pos = text[:4000].rfind("\n\n")
             if split_pos == -1:
                 split_pos = 4000
-            parts.append(text[:split_pos])
+            parts.append(text[:4000])
             text = text[split_pos:].strip()
         parts.append(text)
         for part in parts:
@@ -179,6 +208,9 @@ async def send_news(target, bot=None):
     await asyncio.sleep(2)
     await send_chunk(alberta_news)
 
+# ---------------------------------------------------------
+# 指令
+# ---------------------------------------------------------
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
     if not memories:
@@ -254,6 +286,9 @@ async def cmd_models(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"錯誤：{str(e)}")
 
+# ---------------------------------------------------------
+# 訊息處理
+# ---------------------------------------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message:
@@ -269,29 +304,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{message.text}")
             await message.reply_text("📝 自動摘要：\n\n" + result)
             return
-
-    # 圖片訊息
-    if message.photo:
-        if chat_type in ["group", "supergroup"]:
-            if not message.caption or TRIGGER_KEYWORD not in message.caption:
-                return
-        if not check_rate_limit(user_id, chat_type):
-            return
-        try:
-            photo_file = await message.photo[-1].get_file()
-            photo_bytes = bytes(await photo_file.download_as_bytearray())
-            img = PIL.Image.open(io.BytesIO(photo_bytes))
-            caption = message.caption or "請描述這張圖片"
-            response = gemini_model.generate_content([
-                f"{caption}，必須用繁體中文回答，不可用簡體中文",
-                img
-            ])
-            await message.reply_text(f"🖼️ {response.text}")
-        except google.api_core.exceptions.ResourceExhausted:
-            await message.reply_text("❌ 安尼亞太忙了，請等60秒再試")
-        except Exception as e:
-            await message.reply_text(f"❌ 圖片辨識失敗：{str(e)}")
-        return
 
     # 語音訊息
     elif message.voice:
@@ -395,11 +407,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         system_prompt = build_system_prompt()
         reply = gemini_chat(f"{system_prompt}\n\n{sender_name} 說：{user_text}")
 
-        if is_important(user_text):
+        if is_重要 := is_important(user_text):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
 
         await message.reply_text(reply)
 
+# ---------------------------------------------------------
+# 排程提醒
+# ---------------------------------------------------------
 async def check_reminders():
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     sent_today = False
@@ -430,6 +445,9 @@ async def send_daily_news():
             sent_today = False
         await asyncio.sleep(60)
 
+# ---------------------------------------------------------
+# Render 健康檢查 HTTP Server
+# ---------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -448,6 +466,9 @@ def run_web():
     server = HTTPServer(("0.0.0.0", port), Handler)
     server.serve_forever()
 
+# ---------------------------------------------------------
+# 主程式
+# ---------------------------------------------------------
 def main():
     threading.Thread(target=run_web, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
