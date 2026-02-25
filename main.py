@@ -302,9 +302,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }]
             )
             await message.reply_text(f"🖼️ {response.choices[0].message.content}")
-    
-            except Exception as e:
-    await message.reply_text(f"❌ 圖片辨識失敗：{str(e)}")
+        except Exception as e:
+            await message.reply_text(f"❌ 圖片辨識失敗：{str(e)}")
+        return
     # 文字訊息
     elif message.text:
         user_text = message.text
