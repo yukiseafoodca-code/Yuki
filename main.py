@@ -30,27 +30,26 @@ def get_stable_model():
                 available.append(m.name)
                 print(f"可用模型: {m.name}")
         
-        # 修正後的搜尋工具宣告
-        tools = [{"google_search": {}}] 
+        # --- 核心修改：定義聯網工具 ---
+        # 使用 genai.Tool 物件是目前最不容易報 400 錯誤的寫法
+        tools = [genai.Tool(google_search_retrieval=genai.GoogleSearchRetrieval())]
         
-        # 按優先順序嘗試
+        # 按優先順序嘗試，聯網功能在 1.5 系列最為強大
         for preferred in ['models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash', 
                           'models/gemini-1.0-pro', 'models/gemini-pro']:
             if preferred in available:
-                print(f"✅ 使用並開啟搜尋功能: {preferred}")
+                print(f"✅ 使用模型並開啟搜尋功能: {preferred}")
                 return genai.GenerativeModel(model_name=preferred, tools=tools)
         
-        # 用第一個可用的
         if available:
-            print(f"✅ 使用第一個可用並開啟搜尋功能: {available[0]}")
+            print(f"✅ 使用第一個可用模型並開啟搜尋: {available[0]}")
             return genai.GenerativeModel(model_name=available[0], tools=tools)
             
     except Exception as e:
-        print(f"⚠️ 查找失敗: {e}")
+        print(f"⚠️ 聯網工具初始化失敗: {e}")
     
-    # 預設回退版本也同步修正
-    return genai.GenerativeModel('gemini-pro', tools=[{"google_search": {}}])
-
+    # 完全失效時的回退方案
+    return genai.GenerativeModel('gemini-1.5-flash')
 
 gemini_model = get_stable_model()
 memory_db = MemoryDB()
@@ -101,7 +100,7 @@ def build_system_prompt():
     prompt = """你是安尼亞，一個聰明的家庭助理。
 你的名字是安尼亞，不是其他名字。
 必須使用繁體中文回覆，絕對禁止使用簡體中文。
-不可以自己生成新聞內容。
+當用戶問到即時新聞、天氣或近期發生的事件時，請主動調用 Google 搜尋。
 回答要簡短直接。
 
 """
@@ -470,8 +469,8 @@ def main():
     loop.create_task(send_daily_news())
     loop.create_task(check_reminders())
     print("🚀 安尼亞 Bot 已成功啟動！")
-    app.run_polling()
+    # 增加 drop_pending_updates=True 解決部署時的 Conflict 報錯
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-    
