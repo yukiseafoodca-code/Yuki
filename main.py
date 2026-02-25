@@ -30,23 +30,25 @@ def get_stable_model():
                 available.append(m.name)
                 print(f"可用模型: {m.name}")
         
+        # 搜尋工具宣告
+        tools = [{"google_search_retrieval": {}}]
+        
         # 按優先順序嘗試
         for preferred in ['models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash', 
                           'models/gemini-1.0-pro', 'models/gemini-pro']:
             if preferred in available:
-                print(f"✅ 使用: {preferred}")
-                return genai.GenerativeModel(model_name=preferred)
+                print(f"✅ 使用並開啟搜尋功能: {preferred}")
+                return genai.GenerativeModel(model_name=preferred, tools=tools)
         
         # 用第一個可用的
         if available:
-            print(f"✅ 使用第一個可用: {available[0]}")
-            return genai.GenerativeModel(model_name=available[0])
+            print(f"✅ 使用第一個可用並開啟搜尋功能: {available[0]}")
+            return genai.GenerativeModel(model_name=available[0], tools=tools)
             
     except Exception as e:
         print(f"⚠️ 查找失敗: {e}")
     
-    return genai.GenerativeModel('gemini-pro')
-
+    return genai.GenerativeModel('gemini-pro', tools=[{"google_search_retrieval": {}}])
 
 gemini_model = get_stable_model()
 memory_db = MemoryDB()
@@ -470,3 +472,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
