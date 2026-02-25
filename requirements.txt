@@ -1,3 +1,6 @@
 python-telegram-bot==20.8
-groq
+google-generativeai
 supabase
+groq
+requests
+
