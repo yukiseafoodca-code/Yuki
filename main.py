@@ -24,19 +24,29 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 def get_stable_model():
     try:
+        available = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                if 'gemini-1.5-flash' in m.name:
-                    print(f"✅ 使用模型: {m.name}")
-                    return genai.GenerativeModel(model_name=m.name)
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'flash' in m.name:
-                    print(f"✅ 備用模型: {m.name}")
-                    return genai.GenerativeModel(model_name=m.name)
+                available.append(m.name)
+                print(f"可用模型: {m.name}")
+        
+        # 按優先順序嘗試
+        for preferred in ['models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash', 
+                          'models/gemini-1.0-pro', 'models/gemini-pro']:
+            if preferred in available:
+                print(f"✅ 使用: {preferred}")
+                return genai.GenerativeModel(model_name=preferred)
+        
+        # 用第一個可用的
+        if available:
+            print(f"✅ 使用第一個可用: {available[0]}")
+            return genai.GenerativeModel(model_name=available[0])
+            
     except Exception as e:
-        print(f"⚠️ 模型查找失敗: {e}")
-    return genai.GenerativeModel('gemini-1.5-flash')
+        print(f"⚠️ 查找失敗: {e}")
+    
+    return genai.GenerativeModel('gemini-pro')
+
 
 gemini_model = get_stable_model()
 memory_db = MemoryDB()
