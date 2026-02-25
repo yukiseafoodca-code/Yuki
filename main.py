@@ -32,7 +32,7 @@ def get_stable_model():
         
         # --- 植入搜尋工具 ---
         # 這是 Gemini 1.5 系列支援最穩定的搜尋工具宣告方式
-        tools = [{"google_search_retrieval": {}}]
+        tools = [{"google_search": {}}]
         
         # 按優先順序嘗試，聯網功能建議優先使用 1.5 系列
         for preferred in ['models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash', 
