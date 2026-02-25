@@ -8,7 +8,6 @@ import xml.etree.ElementTree as ET
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import google.generativeai as genai
 import google.api_core.exceptions
-from google.generativeai.types import Tool, GoogleSearchRetrieval
 from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from memory import MemoryDB
@@ -45,14 +44,17 @@ def get_stable_model():
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 
+# 嘗試建立帶搜尋工具的模型（新版 SDK 格式）
 try:
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
-        tools=[Tool(google_search_retrieval=GoogleSearchRetrieval())]
+        tools=[genai.protos.Tool(
+            google_search=genai.protos.GoogleSearch()
+        )]
     )
     print("Google Search 工具已啟用")
 except Exception as e:
-    print(f"Google Search 工具啟用失敗，使用普通模型: {e}")
+    print(f"Google Search 不可用，使用普通模型: {e}")
     search_model = chat_model
 
 memory_db = MemoryDB()
@@ -419,7 +421,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_news(message)
             return
 
-        # 一般對話 - 自動判斷是否用網路搜尋
+        # 一般對話
         system_prompt = build_system_prompt()
         full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}"
 
