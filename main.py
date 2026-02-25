@@ -30,8 +30,8 @@ def get_stable_model():
                 available.append(m.name)
                 print(f"可用模型: {m.name}")
         
-        # 搜尋工具宣告
-        tools = [{"google_search_retrieval": {}}]
+        # 修正後的搜尋工具宣告
+        tools = [{"google_search": {}}] 
         
         # 按優先順序嘗試
         for preferred in ['models/gemini-1.5-flash-latest', 'models/gemini-1.5-flash', 
@@ -48,7 +48,9 @@ def get_stable_model():
     except Exception as e:
         print(f"⚠️ 查找失敗: {e}")
     
-    return genai.GenerativeModel('gemini-pro', tools=[{"google_search_retrieval": {}}])
+    # 預設回退版本也同步修正
+    return genai.GenerativeModel('gemini-pro', tools=[{"google_search": {}}])
+
 
 gemini_model = get_stable_model()
 memory_db = MemoryDB()
