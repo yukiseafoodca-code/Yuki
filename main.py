@@ -161,7 +161,6 @@ async def send_news(target, bot=None):
     await asyncio.sleep(2)
     await send_chunk(alberta_news)
 
-# 指令處理
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
     if not memories:
@@ -242,7 +241,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_type = message.chat.type
     user_id = message.from_user.id
 
-    # 自動摘要長訊息（超過500字）
+    # 自動摘要長訊息（群組超過500字）
     if message.text and len(message.text) > 500:
         if chat_type in ["group", "supergroup"]:
             response = groq_client.chat.completions.create(
@@ -258,7 +257,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 語音訊息
     if message.voice:
         if chat_type in ["group", "supergroup"]:
-            return
+            if not message.caption or TRIGGER_KEYWORD not in message.caption:
+                return
         if not check_rate_limit(user_id, chat_type):
             return
         try:
@@ -281,7 +281,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 圖片訊息
     elif message.photo:
         if chat_type in ["group", "supergroup"]:
-            return
+            if not message.caption or TRIGGER_KEYWORD not in message.caption:
+                return
         if not check_rate_limit(user_id, chat_type):
             return
         try:
@@ -405,7 +406,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 memory_db.add_expense(data["amount"], data["category"], data["description"], sender_name)
                 await message.reply_text(f"💰 已記帳：{data['category']} ${data['amount']} - {data['description']}")
             except:
-                await message.reply_text("❌ 無法識別支出格式，請嘗試：記帳 食物 $50 超市購物")
+                await message.reply_text("❌ 無法識別支出格式")
             return
 
         # 明確要求新聞
