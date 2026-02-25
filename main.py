@@ -18,7 +18,7 @@ MY_CHAT_ID = os.environ["MY_CHAT_ID"]
 TRIGGER_KEYWORD = "安尼亞"
 
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
+gemini_model = genai.GenerativeModel('gemini-2.0-flash')
 
 memory_db = MemoryDB()
 last_reply = {}
