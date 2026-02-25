@@ -18,7 +18,7 @@ MY_CHAT_ID = os.environ["MY_CHAT_ID"]
 TRIGGER_KEYWORD = "安尼亞"
 
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
 memory_db = MemoryDB()
 last_reply = {}
@@ -51,8 +51,11 @@ def check_rate_limit(user_id, chat_type):
     return True
 
 def gemini_chat(prompt):
-    response = gemini_model.generate_content(prompt)
-    return response.text
+    try:
+        response = gemini_model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"❌ 錯誤：{str(e)}"
 
 def build_system_prompt():
     人物 = memory_db.get_by_category("人物")
@@ -62,9 +65,8 @@ def build_system_prompt():
 
     prompt = """你是安尼亞，一個聰明的家庭助理。
 你的名字是安尼亞，不是其他名字。
-【重要】必須使用繁體中文回覆，例如：係、唔係、嘅、喺、係咁。
-【重要】絕對禁止使用簡體中文，例如：的、是、在、不是。
-【重要】不可以自己生成新聞內容。
+必須使用繁體中文回覆，絕對禁止使用簡體中文。
+不可以自己生成新聞內容。
 回答要簡短直接。
 
 """
@@ -76,7 +78,6 @@ def build_system_prompt():
         prompt += "【設定】\n" + "\n".join(設定) + "\n\n"
     if 事件:
         prompt += "【近期事件】\n" + "\n".join(事件[-5:]) + "\n\n"
-
     return prompt
 
 def parse_rss(url, count=5):
@@ -99,26 +100,16 @@ def translate_news(articles, section_name):
     news_text = ""
     for i, a in enumerate(articles, 1):
         news_text += f"{i}. {a['title']}\n{a['description']}\n\n"
-
     if not news_text.strip():
         return f"暫時無法獲取{section_name}"
-
     prompt = f"""請將以下5則真實新聞翻譯並擴展成繁體中文。
-
-嚴格要求：
-- 必須使用繁體中文，絕對不可以用簡體中文
-- 每則新聞最少200字
-- 格式：
-
+要求：每則最少200字，每則之間空一行，不要用簡體中文，不要加**或##符號。
+格式：
 1. 新聞標題
-新聞詳細內容
-
-- 每則之間空一行
-- 不要加 ** 或 ## 等符號
+新聞內容
 
 原文：
 {news_text}"""
-
     return gemini_chat(prompt)
 
 def fetch_real_news():
@@ -128,14 +119,9 @@ def fetch_real_news():
         if len(alberta_articles) < 3:
             extra = parse_rss("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
             alberta_articles = (alberta_articles + extra)[:5]
-
         canada_translated = translate_news(canada_articles, "加拿大新聞")
         alberta_translated = translate_news(alberta_articles, "Alberta/Edmonton 新聞")
-
-        canada_result = "🍁 加拿大重點新聞\n\n" + canada_translated
-        alberta_result = "📍 Alberta 或 Edmonton 新聞\n\n" + alberta_translated
-
-        return canada_result, alberta_result
+        return "🍁 加拿大重點新聞\n\n" + canada_translated, "📍 Alberta 或 Edmonton 新聞\n\n" + alberta_translated
     except Exception as e:
         return f"❌ 新聞獲取失敗：{str(e)}", ""
 
@@ -223,7 +209,6 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("請回覆一條訊息並輸入 /summary")
         return
-
     result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{text_to_summarize}")
     await update.message.reply_text("📝 摘要：\n\n" + result)
 
@@ -252,13 +237,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         try:
             photo_file = await message.photo[-1].get_file()
-            photo_bytes = await photo_file.download_as_bytearray()
+            photo_bytes = bytes(await photo_file.download_as_bytearray())
             caption = message.caption or "請描述這張圖片"
-            contents = [
-                {"mime_type": "image/jpeg", "data": bytes(photo_bytes)},
-                f"{caption}，必須用繁體中文回答，不可用簡體中文"
-            ]
-            response = gemini_model.generate_content(contents)
+            import PIL.Image
+            import io
+            img = PIL.Image.open(io.BytesIO(photo_bytes))
+            response = gemini_model.generate_content([
+                f"{caption}，必須用繁體中文回答，不可用簡體中文",
+                img
+            ])
             await message.reply_text(f"🖼️ {response.text}")
         except Exception as e:
             await message.reply_text(f"❌ 圖片辨識失敗：{str(e)}")
@@ -276,11 +263,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             voice_bytes = await voice_file.download_as_bytearray()
             with open("/tmp/voice.ogg", "wb") as f:
                 f.write(voice_bytes)
-            contents = [
-                {"mime_type": "audio/ogg", "data": open("/tmp/voice.ogg", "rb").read()},
+            with open("/tmp/voice.ogg", "rb") as f:
+                audio_data = f.read()
+            response = gemini_model.generate_content([
+                {"mime_type": "audio/ogg", "data": audio_data},
                 "請將這段語音轉錄成繁體中文文字"
-            ]
-            response = gemini_model.generate_content(contents)
+            ])
             await message.reply_text(f"🎤 你說：{response.text}")
         except Exception as e:
             await message.reply_text(f"❌ 語音辨識失敗：{str(e)}")
@@ -297,7 +285,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not check_rate_limit(user_id, chat_type):
             return
 
-        # 設定指令
         if user_text.startswith("設定:"):
             parts = user_text[3:].split("=")
             if len(parts) == 2:
@@ -305,17 +292,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(f"✅ 已記住偏好：{parts[0].strip()} = {parts[1].strip()}")
                 return
 
-        # 強制記憶
         if any(kw in user_text for kw in ["記錄", "記住"]):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
             await message.reply_text("✅ 已記錄！")
             return
 
-        # 新增行事曆
         if "加入行程" in user_text or "新增行程" in user_text:
-            result = gemini_chat(f"""從以下訊息提取行程資料，只回傳 JSON：
+            result = gemini_chat(f"""從以下訊息提取行程資料，只回傳 JSON，不要其他文字：
 {{"title": "標題", "category": "分類(家庭活動/醫生預約/垃圾回收/上課提醒/生日)", "date": "YYYY-MM-DD", "reminder_days": 1}}
-
 訊息：{user_text}
 今天日期：{datetime.date.today()}""")
             try:
@@ -333,11 +317,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text("❌ 無法識別行程格式")
             return
 
-        # 購物清單
         if "買" in user_text or "購物" in user_text or "加入清單" in user_text:
-            result = gemini_chat(f"""從以下訊息提取購物項目，只回傳 JSON：
+            result = gemini_chat(f"""從以下訊息提取購物項目，只回傳 JSON，不要其他文字：
 {{"items": [{{"item": "物品名稱", "quantity": "數量"}}]}}
-
 訊息：{user_text}""")
             try:
                 result = re.sub(r"```json|```", "", result).strip()
@@ -350,11 +332,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text("❌ 無法識別購物項目")
             return
 
-        # 記帳
         if "支出" in user_text or "花了" in user_text or "記帳" in user_text:
-            result = gemini_chat(f"""從以下訊息提取支出資料，只回傳 JSON：
+            result = gemini_chat(f"""從以下訊息提取支出資料，只回傳 JSON，不要其他文字：
 {{"amount": 金額數字, "category": "分類(食物/交通/娛樂/醫療/購物/其他)", "description": "描述"}}
-
 訊息：{user_text}""")
             try:
                 result = re.sub(r"```json|```", "", result).strip()
@@ -365,13 +345,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text("❌ 無法識別支出格式")
             return
 
-        # 新聞
         if any(kw in user_text for kw in ["發新聞", "今日新聞", "要新聞", "給我新聞", "看新聞"]):
             await message.reply_text("📰 正在獲取最新真實新聞，請稍等約30秒...")
             await send_news(message)
             return
 
-        # 一般對話
         system_prompt = build_system_prompt()
         reply = gemini_chat(f"{system_prompt}\n\n{sender_name} 說：{user_text}")
 
