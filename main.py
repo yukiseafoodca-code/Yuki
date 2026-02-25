@@ -45,8 +45,7 @@ def get_stable_model():
     except Exception as e:
         print(f"⚠️ 查找失敗: {e}")
     
-    return genai.GenerativeModel('gemini-pro')
-
+    return genai.GenerativeModel('models/gemini-1.5-flash')
 
 gemini_model = get_stable_model()
 memory_db = MemoryDB()
