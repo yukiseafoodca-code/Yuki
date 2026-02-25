@@ -292,7 +292,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             base64_image = base64.b64encode(photo_bytes).decode("utf-8")
             caption = message.caption or "請描述這張圖片"
             response = groq_client.chat.completions.create(
-                model="llama-3.2-90b-vision-instruct",
+                model="llama-3.2-11b-vision-instruct",
                 messages=[{
                     "role": "user",
                     "content": [
