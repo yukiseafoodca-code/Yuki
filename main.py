@@ -245,7 +245,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if message.text and len(message.text) > 500:
         if chat_type in ["group", "supergroup"]:
             response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama-3.2-90b-vision-instruct",
                 messages=[{
                     "role": "user",
                     "content": f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{message.text}"
