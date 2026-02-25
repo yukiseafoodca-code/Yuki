@@ -44,7 +44,6 @@ def get_stable_model():
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 
-# 嘗試建立帶搜尋工具的模型（新版 SDK 格式）
 try:
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
@@ -88,13 +87,16 @@ def check_rate_limit(user_id, chat_type):
     return True
 
 def needs_search(text):
+    simple_patterns = ["今日是", "今天是", "星期幾", "你好", "在嗎", "在唔在", "是星期"]
+    if any(p in text for p in simple_patterns):
+        return False
     search_triggers = [
-        "最新", "現在", "今日", "最近", "近期",
-        "幾多", "幾錢", "價格", "股價", "匯率",
+        "最新", "最近", "近期",
+        "幾多錢", "價格", "股價", "匯率",
         "天氣", "溫度", "預報",
         "誰是", "是誰", "哪裡", "在哪",
         "公投", "選舉", "政策", "法例", "新政",
-        "消息", "事件", "新聞"
+        "消息", "新聞", "發生咗", "發生什麼"
     ]
     return any(kw in text for kw in search_triggers)
 
@@ -122,10 +124,15 @@ def build_system_prompt():
     設定 = memory_db.get_by_category("設定")
     事件 = memory_db.get_by_category("事件")
 
-    prompt = """你是安尼亞，一個聰明的家庭助理。
+    now = datetime.datetime.now()
+    weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+    today_str = f"{now.strftime('%Y年%m月%d日')} {weekdays[now.weekday()]}"
+
+    prompt = f"""你是安尼亞，一個聰明的家庭助理。
 你的名字是安尼亞，不是其他名字。
 必須使用繁體中文回覆，絕對禁止使用簡體中文。
 你可以用自己的知識或網路搜尋回答問題。
+今天日期：{today_str}
 只有用戶說「發新聞」、「今日新聞」等明確要求時，才用新聞系統發送CBC新聞。
 回答要簡短直接。
 
