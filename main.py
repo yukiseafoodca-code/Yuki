@@ -51,16 +51,30 @@ try:
 except Exception:
     pass
 
-# Gemini grounding search (API-level, no external HTTP needed)
+# Gemini grounding search - 0.8.6 正確格式
 search_model = None
 try:
+    from google.generativeai import protos
+    search_tool = protos.Tool(
+        google_search=protos.GoogleSearch()
+    )
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
-        tools=[{"google_search": {}}]
+        tools=[search_tool]
     )
-    print("Gemini Search 初始化成功")
-except Exception as e:
-    print("Gemini Search 初始化失敗: " + str(e))
+    print("Gemini Search 初始化成功 (protos.GoogleSearch)")
+except Exception as e1:
+    print("protos 方式失敗: " + str(e1))
+    try:
+        search_model = genai.GenerativeModel(
+            model_name=MODEL_NAME,
+            tools=["google_search_retrieval"]
+        )
+        print("Gemini Search 初始化成功 (string)")
+    except Exception as e2:
+        print("string 方式失敗: " + str(e2))
+        search_model = chat_model
+        print("使用普通模型")
 
 if search_model is None:
     search_model = chat_model
