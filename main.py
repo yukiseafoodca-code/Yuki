@@ -48,7 +48,7 @@ chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 try:
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
-        tools=[{"google_search_retrieval": {}}],
+        tools=[{"google_search": {}}],
     )
     print("Google Search 工具已啟用")
 except Exception as e:
