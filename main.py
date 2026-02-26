@@ -43,12 +43,15 @@ def get_stable_model():
 
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
+memory_db = MemoryDB()
+last_reply = {}
 
 def web_search(query):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    # 先試 DuckDuckGo JSON API
+    # 試 DuckDuckGo JSON API
     try:
-        url = "https://api.duckduckgo.com/?q=" + requests.utils.quote(query) + "&format=json&no_html=1&skip_disambig=1"
+        encoded = requests.utils.quote(query)
+        url = "https://api.duckduckgo.com/?q=" + encoded + "&format=json&no_html=1&skip_disambig=1"
         res = requests.get(url, headers=headers, timeout=8)
         data = res.json()
         results = []
@@ -58,13 +61,14 @@ def web_search(query):
             if isinstance(r, dict) and r.get("Text"):
                 results.append(r["Text"])
         if results:
-            print(f"DuckDuckGo 搜尋成功")
+            print("DuckDuckGo 搜尋成功")
             return "\n\n".join(results[:5])
     except Exception as e:
         print(f"DuckDuckGo 失敗: {e}")
     # 試 Google News RSS
     try:
-        url = "https://news.google.com/rss/search?q=" + requests.utils.quote(query) + "&hl=zh-TW&gl=CA&ceid=CA:zh-Hant"
+        encoded = requests.utils.quote(query)
+        url = "https://news.google.com/rss/search?q=" + encoded + "&hl=zh-TW&gl=CA&ceid=CA:zh-Hant"
         res = requests.get(url, headers=headers, timeout=8)
         root = ET.fromstring(res.content)
         items = root.findall(".//item")
@@ -73,16 +77,13 @@ def web_search(query):
             title = item.findtext("title") or ""
             desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
             if title:
-                results.append(f"{title}: {desc}")
+                results.append(title + ": " + desc)
         if results:
-            print(f"Google News RSS 搜尋成功")
+            print("Google News RSS 搜尋成功")
             return "\n\n".join(results)
     except Exception as e:
         print(f"Google News RSS 失敗: {e}")
     return None
-
-memory_db = MemoryDB()
-last_reply = {}
 
 def get_category(text):
     if any(kw in text for kw in ["我叫", "我是", "他叫", "她叫", "家人"]):
@@ -132,27 +133,23 @@ def gemini_chat(prompt):
     except google.api_core.exceptions.ResourceExhausted:
         return "安尼亞太忙了，請等60秒再試"
     except Exception as e:
-        return f"錯誤：{str(e)}"
+        return "錯誤：" + str(e)
 
 def build_system_prompt():
     人物 = memory_db.get_by_category("人物")
     喜好 = memory_db.get_by_category("喜好")
     設定 = memory_db.get_by_category("設定")
     事件 = memory_db.get_by_category("事件")
-
     now = datetime.datetime.now()
     weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-    today_str = f"{now.strftime('%Y年%m月%d日')} {weekdays[now.weekday()]}"
-
-    prompt = f"""你是安尼亞，一個聰明的家庭助理。
-你的名字是安尼亞，不是其他名字。
-必須使用繁體中文回覆，絕對禁止使用簡體中文。
-今天日期：{today_str}
-回答時絕對不可以使用 * ** ## 等符號。
-只有用戶說「發新聞」、「今日新聞」等明確要求時，才用新聞系統發送CBC新聞。
-回答要簡短直接。
-
-"""
+    today_str = now.strftime("%Y年%m月%d日") + " " + weekdays[now.weekday()]
+    prompt = "你是安尼亞，一個聰明的家庭助理。\n"
+    prompt += "你的名字是安尼亞，不是其他名字。\n"
+    prompt += "必須使用繁體中文回覆，絕對禁止使用簡體中文。\n"
+    prompt += "今天日期：" + today_str + "\n"
+    prompt += "回答時絕對不可以使用 * ** ## 等符號。\n"
+    prompt += "只有用戶說「發新聞」、「今日新聞」等明確要求時，才用新聞系統發送CBC新聞。\n"
+    prompt += "回答要簡短直接。\n\n"
     if 人物:
         prompt += "【人物資料】\n" + "\n".join(人物) + "\n\n"
     if 喜好:
@@ -182,17 +179,12 @@ def parse_rss(url, count=5):
 def translate_news(articles, section_name):
     news_text = ""
     for i, a in enumerate(articles, 1):
-        news_text += f"{i}. {a['title']}\n{a['description']}\n\n"
+        news_text += str(i) + ". " + a["title"] + "\n" + a["description"] + "\n\n"
     if not news_text.strip():
-        return f"暫時無法獲取{section_name}"
-    prompt = f"""請將以下5則真實新聞翻譯並擴展成繁體中文。
-要求：每則最少200字，每則之間空一行，不要用簡體中文，不要加**或##符號。
-格式：
-1. 新聞標題
-新聞內容
-
-原文：
-{news_text}"""
+        return "暫時無法獲取" + section_name
+    prompt = "請將以下5則真實新聞翻譯並擴展成繁體中文。\n"
+    prompt += "要求：每則最少200字，每則之間空一行，不要用簡體中文，不要加**或##符號。\n"
+    prompt += "格式：\n1. 新聞標題\n新聞內容\n\n原文：\n" + news_text
     return gemini_chat(prompt)
 
 def fetch_real_news():
@@ -206,7 +198,7 @@ def fetch_real_news():
         alberta_translated = translate_news(alberta_articles, "Alberta/Edmonton 新聞")
         return "加拿大重點新聞\n\n" + canada_translated, "Alberta 或 Edmonton 新聞\n\n" + alberta_translated
     except Exception as e:
-        return f"新聞獲取失敗：{str(e)}", ""
+        return "新聞獲取失敗：" + str(e), ""
 
 async def send_news(target, bot=None):
     canada_news, alberta_news = fetch_real_news()
@@ -253,7 +245,7 @@ async def cmd_calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = "未來30天行程：\n\n"
     for e in events:
-        text += f"{e['event_date']} [{e['category']}] {e['title']}\n"
+        text += e["event_date"] + " [" + e["category"] + "] " + e["title"] + "\n"
     await update.message.reply_text(text)
 
 async def cmd_shopping(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,7 +255,7 @@ async def cmd_shopping(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = "購物清單：\n\n"
     for i, item in enumerate(items, 1):
-        text += f"{i}. {item['item']} x{item['quantity']} （{item['added_by']}）\n"
+        text += str(i) + ". " + item["item"] + " x" + str(item["quantity"]) + " （" + item["added_by"] + "）\n"
     await update.message.reply_text(text)
 
 async def cmd_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -271,17 +263,17 @@ async def cmd_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not expenses:
         await update.message.reply_text("本月沒有記帳記錄")
         return
-    total = sum(float(e['amount']) for e in expenses)
+    total = sum(float(e["amount"]) for e in expenses)
     categories = {}
     for e in expenses:
-        cat = e['category']
-        categories[cat] = categories.get(cat, 0) + float(e['amount'])
-    text = f"本月支出摘要：\n總計：${total:.2f}\n\n"
+        cat = e["category"]
+        categories[cat] = categories.get(cat, 0) + float(e["amount"])
+    text = "本月支出摘要：\n總計：$" + f"{total:.2f}" + "\n\n"
     for cat, amount in categories.items():
-        text += f"{cat}：${amount:.2f}\n"
+        text += cat + "：$" + f"{amount:.2f}" + "\n"
     text += "\n詳細記錄：\n"
     for e in expenses:
-        text += f"{e['expense_date']} [{e['category']}] {e['description']} ${e['amount']}\n"
+        text += e["expense_date"] + " [" + e["category"] + "] " + e["description"] + " $" + str(e["amount"]) + "\n"
     await update.message.reply_text(text)
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -292,7 +284,7 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("請回覆一條訊息並輸入 /summary")
         return
-    result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行，不用**符號：\n\n{text_to_summarize}")
+    result = gemini_chat("請用繁體中文將以下內容摘要成3-5點重點，每點一行，不用**符號：\n\n" + text_to_summarize)
     await update.message.reply_text("摘要：\n\n" + result)
 
 async def cmd_models(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,10 +293,10 @@ async def cmd_models(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = "可用模型：\n"
         for m in models:
             if "generateContent" in m.supported_generation_methods:
-                text += f"• {m.name}\n"
+                text += "- " + m.name + "\n"
         await update.message.reply_text(text[:4000])
     except Exception as e:
-        await update.message.reply_text(f"錯誤：{str(e)}")
+        await update.message.reply_text("錯誤：" + str(e))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -318,7 +310,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 自動摘要長訊息
     if message.text and len(message.text) > 500:
         if chat_type in ["group", "supergroup"]:
-            result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行，不用**符號：\n\n{message.text}")
+            result = gemini_chat("請用繁體中文將以下內容摘要成3-5點重點，每點一行，不用**符號：\n\n" + message.text)
             await message.reply_text("自動摘要：\n\n" + result)
             return
 
@@ -334,15 +326,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo_bytes = bytes(await photo_file.download_as_bytearray())
             img = PIL.Image.open(io.BytesIO(photo_bytes))
             caption = message.caption or "請描述這張圖片"
-            response = chat_model.generate_content([
-                f"{caption}，必須用繁體中文回答，不可用簡體中文，不可用**或##符號",
-                img
-            ])
+            response = chat_model.generate_content([caption + "，必須用繁體中文回答，不可用簡體中文，不可用**或##符號", img])
             await message.reply_text(response.text)
         except google.api_core.exceptions.ResourceExhausted:
             await message.reply_text("安尼亞太忙了，請等60秒再試")
         except Exception as e:
-            await message.reply_text(f"圖片辨識失敗：{str(e)}")
+            await message.reply_text("圖片辨識失敗：" + str(e))
         return
 
     # 語音訊息
@@ -359,13 +348,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f.write(voice_bytes)
             with open("/tmp/voice.ogg", "rb") as f:
                 audio_data = f.read()
-            response = chat_model.generate_content([
-                {"mime_type": "audio/ogg", "data": audio_data},
-                "請將這段語音轉錄成繁體中文文字"
-            ])
-            await message.reply_text(f"你說：{response.text}")
+            response = chat_model.generate_content([{"mime_type": "audio/ogg", "data": audio_data}, "請將這段語音轉錄成繁體中文文字"])
+            await message.reply_text("你說：" + response.text)
         except Exception as e:
-            await message.reply_text(f"語音辨識失敗：{str(e)}")
+            await message.reply_text("語音辨識失敗：" + str(e))
         return
 
     # 文字訊息
@@ -383,7 +369,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = user_text[3:].split("=")
             if len(parts) == 2:
                 memory_db.set_preference(parts[0].strip(), parts[1].strip())
-                await message.reply_text(f"已記住偏好：{parts[0].strip()} = {parts[1].strip()}")
+                await message.reply_text("已記住偏好：" + parts[0].strip() + " = " + parts[1].strip())
                 return
 
         if any(kw in user_text for kw in ["記錄", "記住"]):
@@ -392,49 +378,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if "加入行程" in user_text or "新增行程" in user_text:
-            result = gemini_chat(f"""從以下訊息提取行程資料，只回傳 JSON，不要其他文字：
-{{"title": "標題", "category": "分類(家庭活動/醫生預約/垃圾回收/上課提醒/生日)", "date": "YYYY-MM-DD", "reminder_days": 1}}
-訊息：{user_text}
-今天日期：{datetime.date.today()}""")
+            prompt = "從以下訊息提取行程資料，只回傳 JSON，不要其他文字：\n"
+            prompt += '{"title": "標題", "category": "分類(家庭活動/醫生預約/垃圾回收/上課提醒/生日)", "date": "YYYY-MM-DD", "reminder_days": 1}\n'
+            prompt += "訊息：" + user_text + "\n今天日期：" + str(datetime.date.today())
+            result = gemini_chat(prompt)
             try:
                 result = re.sub(r"```json|```", "", result).strip()
                 data = json.loads(result)
-                memory_db.add_event(
-                    title=data["title"],
-                    category=data["category"],
-                    event_date=data["date"],
-                    reminder_days=data.get("reminder_days", 1),
-                    created_by=sender_name
-                )
-                await message.reply_text(f"已加入行程：{data['date']} {data['title']}")
+                memory_db.add_event(title=data["title"], category=data["category"], event_date=data["date"], reminder_days=data.get("reminder_days", 1), created_by=sender_name)
+                await message.reply_text("已加入行程：" + data["date"] + " " + data["title"])
             except Exception:
                 await message.reply_text("無法識別行程格式")
             return
 
         if "買" in user_text or "購物" in user_text or "加入清單" in user_text:
-            result = gemini_chat(f"""從以下訊息提取購物項目，只回傳 JSON，不要其他文字：
-{{"items": [{{"item": "物品名稱", "quantity": "數量"}}]}}
-訊息：{user_text}""")
+            prompt = "從以下訊息提取購物項目，只回傳 JSON，不要其他文字：\n"
+            prompt += '{"items": [{"item": "物品名稱", "quantity": "數量"}]}\n訊息：' + user_text
+            result = gemini_chat(prompt)
             try:
                 result = re.sub(r"```json|```", "", result).strip()
                 data = json.loads(result)
                 for item in data["items"]:
                     memory_db.add_shopping(item["item"], item.get("quantity", "1"), sender_name)
                 items_text = "、".join([i["item"] for i in data["items"]])
-                await message.reply_text(f"已加入購物清單：{items_text}")
+                await message.reply_text("已加入購物清單：" + items_text)
             except Exception:
                 await message.reply_text("無法識別購物項目")
             return
 
         if "支出" in user_text or "花了" in user_text or "記帳" in user_text:
-            result = gemini_chat(f"""從以下訊息提取支出資料，只回傳 JSON，不要其他文字：
-{{"amount": 金額數字, "category": "分類(食物/交通/娛樂/醫療/購物/其他)", "description": "描述"}}
-訊息：{user_text}""")
+            prompt = "從以下訊息提取支出資料，只回傳 JSON，不要其他文字：\n"
+            prompt += '{"amount": 金額數字, "category": "分類(食物/交通/娛樂/醫療/購物/其他)", "description": "描述"}\n訊息：' + user_text
+            result = gemini_chat(prompt)
             try:
                 result = re.sub(r"```json|```", "", result).strip()
                 data = json.loads(result)
                 memory_db.add_expense(data["amount"], data["category"], data["description"], sender_name)
-                await message.reply_text(f"已記帳：{data['category']} ${data['amount']} - {data['description']}")
+                await message.reply_text("已記帳：" + data["category"] + " $" + str(data["amount"]) + " - " + data["description"])
             except Exception:
                 await message.reply_text("無法識別支出格式")
             return
@@ -452,11 +432,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("🔍 正在搜尋最新資料...")
             search_results = web_search(user_text)
             if search_results:
-                full_prompt = f"{system_prompt}\n\n以下是最新網路搜尋結果，請根據這些資料回答，不要說正在搜尋：\n{search_results}\n\n{sender_name} 問：{user_text}"
+                full_prompt = system_prompt + "\n\n以下是最新網路搜尋結果，請根據這些資料回答，不要說正在搜尋：\n" + search_results + "\n\n" + sender_name + " 問：" + user_text
             else:
-                full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}（注意：網路搜尋暫時不可用，請用你的知識回答）"
+                full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text + "（網路搜尋暫時不可用，請用你的知識回答）"
         else:
-            full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}"
+            full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
 
         reply = gemini_chat(full_prompt)
 
@@ -475,7 +455,7 @@ async def check_reminders():
             if events:
                 text = "本週提醒：\n\n"
                 for e in events:
-                    text += f"{e['event_date']} [{e['category']}] {e['title']}\n"
+                    text += e["event_date"] + " [" + e["category"] + "] " + e["title"] + "\n"
                 await bot.send_message(chat_id=MY_CHAT_ID, text=text)
             sent_today = True
         if now.hour != 8:
@@ -498,12 +478,12 @@ async def send_daily_news():
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Anya Bot is running")
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
     def log_message(self, format, *args):
         pass
@@ -533,4 +513,5 @@ def main():
     print("安尼亞 Bot 已成功啟動！")
     app.run_polling()
 
-if __name__ == "__m
+if __name__ == "__main__":
+    main()
