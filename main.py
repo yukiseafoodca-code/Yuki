@@ -44,16 +44,42 @@ def get_stable_model():
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 
-# 建立帶 Google Search 的模型
-try:
-    search_model = genai.GenerativeModel(
-        model_name=MODEL_NAME,
-        tools=[{"google_search": {}}],
-    )
-    print("Google Search 工具已啟用")
-except Exception as e:
-    print(f"Google Search 不可用: {e}")
-    search_model = chat_model
+def web_search(query):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    # 先試 DuckDuckGo JSON API
+    try:
+        url = "https://api.duckduckgo.com/?q=" + requests.utils.quote(query) + "&format=json&no_html=1&skip_disambig=1"
+        res = requests.get(url, headers=headers, timeout=8)
+        data = res.json()
+        results = []
+        if data.get("AbstractText"):
+            results.append(data["AbstractText"])
+        for r in data.get("RelatedTopics", [])[:4]:
+            if isinstance(r, dict) and r.get("Text"):
+                results.append(r["Text"])
+        if results:
+            print(f"DuckDuckGo 搜尋成功")
+            return "\n\n".join(results[:5])
+    except Exception as e:
+        print(f"DuckDuckGo 失敗: {e}")
+    # 試 Google News RSS
+    try:
+        url = "https://news.google.com/rss/search?q=" + requests.utils.quote(query) + "&hl=zh-TW&gl=CA&ceid=CA:zh-Hant"
+        res = requests.get(url, headers=headers, timeout=8)
+        root = ET.fromstring(res.content)
+        items = root.findall(".//item")
+        results = []
+        for item in items[:5]:
+            title = item.findtext("title") or ""
+            desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+            if title:
+                results.append(f"{title}: {desc}")
+        if results:
+            print(f"Google News RSS 搜尋成功")
+            return "\n\n".join(results)
+    except Exception as e:
+        print(f"Google News RSS 失敗: {e}")
+    return None
 
 memory_db = MemoryDB()
 last_reply = {}
@@ -99,25 +125,13 @@ def needs_search(text):
     ]
     return any(kw in text for kw in search_triggers)
 
-def gemini_chat(prompt, use_search=False):
+def gemini_chat(prompt):
     try:
-        model = search_model if use_search else chat_model
-        response = model.generate_content(prompt)
-        # 提取文字（search model 可能有多個 parts）
-        text = ""
-        for part in response.candidates[0].content.parts:
-            if hasattr(part, 'text') and part.text:
-                text += part.text
-        return text if text else response.text
+        response = chat_model.generate_content(prompt)
+        return response.text
     except google.api_core.exceptions.ResourceExhausted:
         return "安尼亞太忙了，請等60秒再試"
     except Exception as e:
-        if use_search:
-            try:
-                response = chat_model.generate_content(prompt)
-                return response.text
-            except Exception:
-                pass
         return f"錯誤：{str(e)}"
 
 def build_system_prompt():
@@ -436,9 +450,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if use_web_search:
             await message.reply_text("🔍 正在搜尋最新資料...")
+            search_results = web_search(user_text)
+            if search_results:
+                full_prompt = f"{system_prompt}\n\n以下是最新網路搜尋結果，請根據這些資料回答，不要說正在搜尋：\n{search_results}\n\n{sender_name} 問：{user_text}"
+            else:
+                full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}（注意：網路搜尋暫時不可用，請用你的知識回答）"
+        else:
+            full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}"
 
-        full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}"
-        reply = gemini_chat(full_prompt, use_search=use_web_search)
+        reply = gemini_chat(full_prompt)
 
         if is_important(user_text):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
@@ -513,5 +533,4 @@ def main():
     print("安尼亞 Bot 已成功啟動！")
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__m
