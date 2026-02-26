@@ -46,11 +46,12 @@ chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 
 # 建立帶 Google Search 的模型
 try:
-    from google.generativeai import types as genai_types
+    try:
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
-        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+        tools=["google_search_retrieval"],
     )
+    
     print("Google Search 工具已啟用")
 except Exception as e:
     print(f"Google Search 不可用: {e}")
