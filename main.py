@@ -51,75 +51,11 @@ try:
 except Exception:
     pass
 
-# Gemini grounding search - 0.8.6 正確格式
-search_model = None
-try:
-    from google.generativeai import protos
-    search_tool = protos.Tool(
-        google_search=protos.GoogleSearch()
-    )
-    search_model = genai.GenerativeModel(
-        model_name=MODEL_NAME,
-        tools=[search_tool]
-    )
-    print("Gemini Search 初始化成功 (protos.GoogleSearch)")
-except Exception as e1:
-    print("protos 方式失敗: " + str(e1))
-    try:
-        search_model = genai.GenerativeModel(
-            model_name=MODEL_NAME,
-            tools=["google_search_retrieval"]
-        )
-        print("Gemini Search 初始化成功 (string)")
-    except Exception as e2:
-        print("string 方式失敗: " + str(e2))
-        search_model = chat_model
-        print("使用普通模型")
 
-if search_model is None:
-    search_model = chat_model
 
 memory_db = MemoryDB()
 last_reply = {}
 
-def web_search(query):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    # 試 DuckDuckGo JSON API
-    try:
-        encoded = requests.utils.quote(query)
-        url = "https://api.duckduckgo.com/?q=" + encoded + "&format=json&no_html=1&skip_disambig=1"
-        res = requests.get(url, headers=headers, timeout=8)
-        data = res.json()
-        results = []
-        if data.get("AbstractText"):
-            results.append(data["AbstractText"])
-        for r in data.get("RelatedTopics", [])[:4]:
-            if isinstance(r, dict) and r.get("Text"):
-                results.append(r["Text"])
-        if results:
-            print("DuckDuckGo 搜尋成功")
-            return "\n\n".join(results[:5])
-    except Exception as e:
-        print(f"DuckDuckGo 失敗: {e}")
-    # 試 Google News RSS
-    try:
-        encoded = requests.utils.quote(query)
-        url = "https://news.google.com/rss/search?q=" + encoded + "&hl=zh-TW&gl=CA&ceid=CA:zh-Hant"
-        res = requests.get(url, headers=headers, timeout=8)
-        root = ET.fromstring(res.content)
-        items = root.findall(".//item")
-        results = []
-        for item in items[:5]:
-            title = item.findtext("title") or ""
-            desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
-            if title:
-                results.append(title + ": " + desc)
-        if results:
-            print("Google News RSS 搜尋成功")
-            return "\n\n".join(results)
-    except Exception as e:
-        print(f"Google News RSS 失敗: {e}")
-    return None
 
 def get_category(text):
     if any(kw in text for kw in ["我叫", "我是", "他叫", "她叫", "家人"]):
@@ -148,44 +84,14 @@ def check_rate_limit(user_id, chat_type):
     last_reply[user_id] = now
     return True
 
-def needs_search(text):
-    simple_patterns = ["今日是", "今天是", "星期幾", "你好", "在嗎", "在唔在", "是星期"]
-    if any(p in text for p in simple_patterns):
-        return False
-    search_triggers = [
-        "最新", "最近", "近期", "搜尋",
-        "幾多錢", "價格", "股價", "匯率",
-        "天氣", "溫度", "預報",
-        "誰是", "是誰", "哪裡", "在哪",
-        "公投", "選舉", "政策", "法例", "新政",
-        "消息", "新聞", "發生咗", "發生什麼"
-    ]
-    return any(kw in text for kw in search_triggers)
 
-def gemini_chat(prompt, use_search=False):
+def gemini_chat(prompt):
     try:
-        model = search_model if use_search else chat_model
-        response = model.generate_content(prompt)
-        # 讀取所有 text parts
-        text = ""
-        try:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    text += part.text
-        except Exception:
-            pass
-        if not text:
-            text = response.text
-        return text
+        response = chat_model.generate_content(prompt)
+        return response.text
     except google.api_core.exceptions.ResourceExhausted:
         return "安尼亞太忙了，請等60秒再試"
     except Exception as e:
-        if use_search:
-            try:
-                response = chat_model.generate_content(prompt)
-                return response.text
-            except Exception:
-                pass
         return "錯誤：" + str(e)
 
 def build_system_prompt():
@@ -479,19 +385,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 一般對話
         system_prompt = build_system_prompt()
-        use_web_search = needs_search(user_text)
-
-        if use_web_search:
-            await message.reply_text("🔍 正在搜尋最新資料...")
-            search_results = web_search(user_text)
-            if search_results:
-                full_prompt = system_prompt + "\n\n以下是最新網路搜尋結果，請根據這些資料回答，不要說正在搜尋：\n" + search_results + "\n\n" + sender_name + " 問：" + user_text
-            else:
-                full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text + "（網路搜尋暫時不可用，請用你的知識回答）"
-        else:
-            full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
-
-        reply = gemini_chat(full_prompt, use_search=use_web_search)
+        full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
+        reply = gemini_chat(full_prompt)
 
         if is_important(user_text):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
