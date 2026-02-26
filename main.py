@@ -43,6 +43,28 @@ def get_stable_model():
 
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
+
+import importlib.metadata
+try:
+    ver = importlib.metadata.version("google-generativeai")
+    print("google-generativeai version: " + ver)
+except Exception:
+    pass
+
+# Gemini grounding search (API-level, no external HTTP needed)
+search_model = None
+try:
+    search_model = genai.GenerativeModel(
+        model_name=MODEL_NAME,
+        tools=[{"google_search": {}}]
+    )
+    print("Gemini Search 初始化成功")
+except Exception as e:
+    print("Gemini Search 初始化失敗: " + str(e))
+
+if search_model is None:
+    search_model = chat_model
+
 memory_db = MemoryDB()
 last_reply = {}
 
@@ -126,13 +148,30 @@ def needs_search(text):
     ]
     return any(kw in text for kw in search_triggers)
 
-def gemini_chat(prompt):
+def gemini_chat(prompt, use_search=False):
     try:
-        response = chat_model.generate_content(prompt)
-        return response.text
+        model = search_model if use_search else chat_model
+        response = model.generate_content(prompt)
+        # 讀取所有 text parts
+        text = ""
+        try:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "text") and part.text:
+                    text += part.text
+        except Exception:
+            pass
+        if not text:
+            text = response.text
+        return text
     except google.api_core.exceptions.ResourceExhausted:
         return "安尼亞太忙了，請等60秒再試"
     except Exception as e:
+        if use_search:
+            try:
+                response = chat_model.generate_content(prompt)
+                return response.text
+            except Exception:
+                pass
         return "錯誤：" + str(e)
 
 def build_system_prompt():
@@ -438,7 +477,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
 
-        reply = gemini_chat(full_prompt)
+        reply = gemini_chat(full_prompt, use_search=use_web_search)
 
         if is_important(user_text):
             memory_db.add_memory(user_text, category=get_category(user_text), sender_name=sender_name)
