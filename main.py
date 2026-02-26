@@ -46,7 +46,6 @@ chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 
 # 建立帶 Google Search 的模型
 try:
-    try:
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
         tools=["google_search_retrieval"],
