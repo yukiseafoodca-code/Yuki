@@ -30,7 +30,7 @@ def get_stable_model():
                 available.append(m.name)
                 print(f"可用模型: {m.name}")
         for preferred in ['models/gemini-2.5-flash', 'models/gemini-1.5-flash-latest',
-                          'models/gemini-1.5-flash', 'models/gemini-1.0-pro', 'models/gemini-pro']:
+                          'models/gemini-1.5-flash', 'models/gemini-1.0-pro']:
             if preferred in available:
                 print(f"使用: {preferred}")
                 return preferred
@@ -44,16 +44,16 @@ def get_stable_model():
 MODEL_NAME = get_stable_model()
 chat_model = genai.GenerativeModel(model_name=MODEL_NAME)
 
+# 建立帶 Google Search 的模型
 try:
+    from google.generativeai import types as genai_types
     search_model = genai.GenerativeModel(
         model_name=MODEL_NAME,
-        tools=[genai.protos.Tool(
-            google_search=genai.protos.GoogleSearch()
-        )]
+        tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
     )
     print("Google Search 工具已啟用")
 except Exception as e:
-    print(f"Google Search 不可用，使用普通模型: {e}")
+    print(f"Google Search 不可用: {e}")
     search_model = chat_model
 
 memory_db = MemoryDB()
@@ -91,7 +91,7 @@ def needs_search(text):
     if any(p in text for p in simple_patterns):
         return False
     search_triggers = [
-        "最新", "最近", "近期",
+        "最新", "最近", "近期", "搜尋",
         "幾多錢", "價格", "股價", "匯率",
         "天氣", "溫度", "預報",
         "誰是", "是誰", "哪裡", "在哪",
@@ -102,11 +102,14 @@ def needs_search(text):
 
 def gemini_chat(prompt, use_search=False):
     try:
-        if use_search:
-            response = search_model.generate_content(prompt)
-        else:
-            response = chat_model.generate_content(prompt)
-        return response.text
+        model = search_model if use_search else chat_model
+        response = model.generate_content(prompt)
+        # 提取文字（search model 可能有多個 parts）
+        text = ""
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'text') and part.text:
+                text += part.text
+        return text if text else response.text
     except google.api_core.exceptions.ResourceExhausted:
         return "安尼亞太忙了，請等60秒再試"
     except Exception as e:
@@ -131,8 +134,8 @@ def build_system_prompt():
     prompt = f"""你是安尼亞，一個聰明的家庭助理。
 你的名字是安尼亞，不是其他名字。
 必須使用繁體中文回覆，絕對禁止使用簡體中文。
-你可以用自己的知識或網路搜尋回答問題。
 今天日期：{today_str}
+回答時絕對不可以使用 * ** ## 等符號。
 只有用戶說「發新聞」、「今日新聞」等明確要求時，才用新聞系統發送CBC新聞。
 回答要簡短直接。
 
@@ -276,7 +279,7 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("請回覆一條訊息並輸入 /summary")
         return
-    result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{text_to_summarize}")
+    result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行，不用**符號：\n\n{text_to_summarize}")
     await update.message.reply_text("摘要：\n\n" + result)
 
 async def cmd_models(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,7 +305,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 自動摘要長訊息
     if message.text and len(message.text) > 500:
         if chat_type in ["group", "supergroup"]:
-            result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行：\n\n{message.text}")
+            result = gemini_chat(f"請用繁體中文將以下內容摘要成3-5點重點，每點一行，不用**符號：\n\n{message.text}")
             await message.reply_text("自動摘要：\n\n" + result)
             return
 
@@ -319,7 +322,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             img = PIL.Image.open(io.BytesIO(photo_bytes))
             caption = message.caption or "請描述這張圖片"
             response = chat_model.generate_content([
-                f"{caption}，必須用繁體中文回答，不可用簡體中文",
+                f"{caption}，必須用繁體中文回答，不可用簡體中文，不可用**或##符號",
                 img
             ])
             await message.reply_text(response.text)
@@ -430,12 +433,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 一般對話
         system_prompt = build_system_prompt()
-        full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}"
-
         use_web_search = needs_search(user_text)
+
         if use_web_search:
             await message.reply_text("🔍 正在搜尋最新資料...")
 
+        full_prompt = f"{system_prompt}\n\n{sender_name} 說：{user_text}"
         reply = gemini_chat(full_prompt, use_search=use_web_search)
 
         if is_important(user_text):
