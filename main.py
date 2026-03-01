@@ -119,43 +119,75 @@ def build_system_prompt():
         prompt += "【近期事件】\n" + "\n".join(事件[-5:]) + "\n\n"
     return prompt
 
-def parse_rss(url, count=5):
+def parse_rss_today(url, count=5):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers, timeout=10)
         root = ET.fromstring(res.content)
         items = root.findall(".//item")
+        today = datetime.date.today()
         articles = []
-        for item in items[:count]:
+        for item in items:
             title = item.findtext("title") or ""
             desc = item.findtext("description") or ""
             desc = re.sub(r"<[^>]+>", "", desc).strip()
-            articles.append({"title": title, "description": desc})
-        return articles
-    except:
+            pub_date = item.findtext("pubDate") or ""
+            # 嘗試解析日期，只保留今日新聞
+            is_today = False
+            try:
+                import email.utils
+                parsed = email.utils.parsedate_to_datetime(pub_date)
+                is_today = parsed.date() == today
+            except Exception:
+                is_today = True  # 無法解析日期就保留
+            if is_today and title:
+                articles.append({"title": title, "description": desc})
+            if len(articles) >= count:
+                break
+        # 如果今日新聞不足，補充最新幾條
+        if len(articles) < 3:
+            for item in items:
+                title = item.findtext("title") or ""
+                desc = item.findtext("description") or ""
+                desc = re.sub(r"<[^>]+>", "", desc).strip()
+                if title and {"title": title, "description": desc} not in articles:
+                    articles.append({"title": title, "description": desc})
+                if len(articles) >= count:
+                    break
+        return articles[:count]
+    except Exception as e:
+        print("RSS 錯誤: " + str(e))
         return []
 
-def translate_news(articles, section_name):
+def format_news(articles, section_name):
+    if not articles:
+        return section_name + "\n\n暫時無法獲取新聞"
+    # 直接翻譯，不擴展
     news_text = ""
     for i, a in enumerate(articles, 1):
         news_text += str(i) + ". " + a["title"] + "\n" + a["description"] + "\n\n"
-    if not news_text.strip():
-        return "暫時無法獲取" + section_name
-    prompt = "請將以下5則真實新聞翻譯並擴展成繁體中文。\n"
-    prompt += "要求：每則最少200字，每則之間空一行，不要用簡體中文，不要加**或##符號。\n"
-    prompt += "格式：\n1. 新聞標題\n新聞內容\n\n原文：\n" + news_text
-    return gemini_chat(prompt)
+    prompt = "請將以下新聞直接翻譯成繁體中文，每條新聞之間空一行。\n"
+    prompt += "規則：只翻譯原文，不添加任何原文沒有的內容，不用**或##符號。\n\n"
+    prompt += news_text
+    translated = gemini_chat(prompt)
+    return section_name + "\n\n" + translated
 
 def fetch_real_news():
     try:
-        canada_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada", 5)
-        alberta_articles = parse_rss("https://www.cbc.ca/cmlink/rss-canada-edmonton", 5)
+        today_str = datetime.date.today().strftime("%Y年%m月%d日")
+        canada_articles = parse_rss_today("https://www.cbc.ca/cmlink/rss-canada", 5)
+        alberta_articles = parse_rss_today("https://www.cbc.ca/cmlink/rss-canada-edmonton", 5)
         if len(alberta_articles) < 3:
-            extra = parse_rss("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
-            alberta_articles = (alberta_articles + extra)[:5]
-        canada_translated = translate_news(canada_articles, "加拿大新聞")
-        alberta_translated = translate_news(alberta_articles, "Alberta/Edmonton 新聞")
-        return "加拿大重點新聞\n\n" + canada_translated, "Alberta 或 Edmonton 新聞\n\n" + alberta_translated
+            extra = parse_rss_today("https://www.cbc.ca/cmlink/rss-canada-calgary", 5)
+            seen = [a["title"] for a in alberta_articles]
+            for a in extra:
+                if a["title"] not in seen:
+                    alberta_articles.append(a)
+                if len(alberta_articles) >= 5:
+                    break
+        canada_news = format_news(canada_articles, "加拿大重點新聞（" + today_str + "）")
+        alberta_news = format_news(alberta_articles, "Alberta / Edmonton 新聞（" + today_str + "）")
+        return canada_news, alberta_news
     except Exception as e:
         return "新聞獲取失敗：" + str(e), ""
 
