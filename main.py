@@ -57,6 +57,244 @@ memory_db = MemoryDB()
 last_reply = {}
 
 
+def web_search(query):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        encoded = requests.utils.quote(query)
+        url = "https://api.duckduckgo.com/?q=" + encoded + "&format=json&no_html=1&skip_disambig=1"
+        res = requests.get(url, headers=headers, timeout=8)
+        data = res.json()
+        results = []
+        if data.get("AbstractText"):
+            results.append(data["AbstractText"])
+        for r in data.get("RelatedTopics", [])[:4]:
+            if isinstance(r, dict) and r.get("Text"):
+                results.append(r["Text"])
+        if results:
+            print("DuckDuckGo 搜尋成功")
+            return "\n\n".join(results[:5])
+    except Exception as e:
+        print("DuckDuckGo 失敗: " + str(e))
+    try:
+        encoded = requests.utils.quote(query)
+        url = "https://news.google.com/rss/search?q=" + encoded + "&hl=zh-TW&gl=CA&ceid=CA:zh-Hant"
+        res = requests.get(url, headers=headers, timeout=8)
+        root = ET.fromstring(res.content)
+        items = root.findall(".//item")
+        results = []
+        for item in items[:5]:
+            title = item.findtext("title") or ""
+            desc = re.sub(r"<[^>]+>", "", item.findtext("description") or "").strip()
+            if title:
+                results.append(title + ": " + desc)
+        if results:
+            print("Google News RSS 搜尋成功")
+            return "\n\n".join(results)
+    except Exception as e:
+        print("Google News RSS 失敗: " + str(e))
+    return None
+
+def needs_search(text):
+    simple_patterns = ["今日是", "今天是", "星期幾", "你好", "在嗎", "在唔在", "是星期"]
+    if any(p in text for p in simple_patterns):
+        return False
+    search_triggers = [
+        "最新", "最近", "近期", "搜尋",
+        "幾多錢", "價格", "股價", "匯率",
+        "天氣", "溫度", "預報", "氣温",
+        "誰是", "是誰", "哪裡", "在哪",
+        "公投", "選舉", "政策", "法例", "新政",
+        "消息", "新聞", "發生咗", "發生什麼"
+    ]
+    return any(kw in text for kw in search_triggers)
+
+
+def fetch_price(url):
+    """抓取網頁價格"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-CA,en;q=0.9"
+    }
+    try:
+        res = requests.get(url, headers=headers, timeout=15)
+        html = res.text
+        # Amazon
+        if "amazon.ca" in url or "amazon.com" in url:
+            patterns = [
+                r'class="a-price-whole">([\d,]+)',
+                r'"priceAmount":([\d.]+)',
+                r'id="priceblock_ourprice"[^>]*>\$?([\d,\.]+)',
+                r'"price":\s*([\d.]+)',
+            ]
+            for p in patterns:
+                m = re.search(p, html)
+                if m:
+                    return float(m.group(1).replace(",", ""))
+        # Best Buy
+        elif "bestbuy.ca" in url:
+            patterns = [
+                r'"salePrice":([\d.]+)',
+                r'"regularPrice":([\d.]+)',
+                r'data-automation="product-price"[^>]*>\$?([\d,\.]+)',
+            ]
+            for p in patterns:
+                m = re.search(p, html)
+                if m:
+                    return float(m.group(1).replace(",", ""))
+        # Canadian Tire
+        elif "canadiantire.ca" in url:
+            patterns = [
+                r'"offering-price"[^>]*>\$?([\d,\.]+)',
+                r'"price":{"value":([\d.]+)',
+                r'data-price="([\d.]+)"',
+            ]
+            for p in patterns:
+                m = re.search(p, html)
+                if m:
+                    return float(m.group(1).replace(",", ""))
+        # 通用價格抓取
+        patterns = [
+            r'\$([\d,]+\.\d{2})',
+            r'"price":([\d.]+)',
+            r'"currentPrice":([\d.]+)',
+            r'"salePrice":([\d.]+)',
+        ]
+        for p in patterns:
+            m = re.search(p, html)
+            if m:
+                return float(m.group(1).replace(",", ""))
+    except Exception as e:
+        print("抓取價格失敗: " + str(e))
+    return None
+
+def get_page_title(url):
+    """抓取網頁標題"""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        m = re.search(r"<title>([^<]+)</title>", res.text)
+        if m:
+            title = m.group(1).strip()
+            # 清理標題
+            for suffix in [" | Amazon.ca", " - Best Buy", " | Best Buy Canada", " | Canadian Tire", " - Canadian Tire"]:
+                title = title.replace(suffix, "")
+            return title[:60]
+    except:
+        pass
+    return url[:50]
+
+def save_watchlist(watchlist):
+    """儲存監控清單到檔案"""
+    try:
+        with open("watchlist.json", "w", encoding="utf-8") as f:
+            json.dump(watchlist, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("儲存監控清單失敗: " + str(e))
+
+# 全域監控清單
+watch_list = load_watchlist()
+
+async def cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """新增監控商品 /watch URL [目標價格]"""
+    if not context.args:
+        await update.message.reply_text("用法：/watch 網址 [目標價格]\n例如：/watch https://www.amazon.ca/xxx 50")
+        return
+    url = context.args[0]
+    target_price = None
+    if len(context.args) > 1:
+        try:
+            target_price = float(context.args[1])
+        except:
+            pass
+    await update.message.reply_text("正在抓取商品資料，請稍等...")
+    title = get_page_title(url)
+    current_price = fetch_price(url)
+    if current_price is None:
+        await update.message.reply_text("無法抓取價格，請確認網址是否正確。\n支援：Amazon.ca、Best Buy、Canadian Tire")
+        return
+    watch_list[url] = {
+        "title": title,
+        "current_price": current_price,
+        "target_price": target_price,
+        "last_price": current_price
+    }
+    save_watchlist(watch_list)
+    msg = "已開始監控：\n" + title + "\n目前價格：$" + str(current_price)
+    if target_price:
+        msg += "\n目標價格：$" + str(target_price)
+    else:
+        msg += "\n（價格下跌就會通知你）"
+    await update.message.reply_text(msg)
+
+async def cmd_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """查看監控清單"""
+    if not watch_list:
+        await update.message.reply_text("監控清單是空的\n用 /watch 網址 來新增商品")
+        return
+    text = "目前監控清單：\n\n"
+    for i, (url, item) in enumerate(watch_list.items(), 1):
+        text += str(i) + ". " + item["title"] + "\n"
+        text += "目前價格：$" + str(item["current_price"]) + "\n"
+        if item.get("target_price"):
+            text += "目標價格：$" + str(item["target_price"]) + "\n"
+        text += url[:60] + "...\n\n"
+    await update.message.reply_text(text)
+
+async def cmd_unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """停止監控"""
+    if not context.args:
+        if not watch_list:
+            await update.message.reply_text("監控清單是空的")
+            return
+        text = "輸入編號停止監控：\n\n"
+        for i, (url, item) in enumerate(watch_list.items(), 1):
+            text += str(i) + ". " + item["title"] + "\n"
+        await update.message.reply_text(text)
+        return
+    try:
+        idx = int(context.args[0]) - 1
+        keys = list(watch_list.keys())
+        if 0 <= idx < len(keys):
+            url = keys[idx]
+            title = watch_list[url]["title"]
+            del watch_list[url]
+            save_watchlist(watch_list)
+            await update.message.reply_text("已停止監控：" + title)
+        else:
+            await update.message.reply_text("編號不存在")
+    except:
+        await update.message.reply_text("用法：/unwatch 編號")
+
+async def check_prices():
+    """定時檢查價格"""
+    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    while True:
+        await asyncio.sleep(3600)  # 每小時檢查一次
+        if not watch_list:
+            continue
+        for url, item in list(watch_list.items()):
+            try:
+                new_price = fetch_price(url)
+                if new_price is None:
+                    continue
+                old_price = item["current_price"]
+                target_price = item.get("target_price")
+                notify = False
+                msg = ""
+                if target_price and new_price <= target_price:
+                    notify = True
+                    msg = "目標價格達到！\n" + item["title"] + "\n價格：$" + str(new_price) + "（目標：$" + str(target_price) + "）\n" + url
+                elif new_price < old_price:
+                    notify = True
+                    saved = round(old_price - new_price, 2)
+                    msg = "價格下跌！\n" + item["title"] + "\n$" + str(old_price) + " → $" + str(new_price) + "（省 $" + str(saved) + "）\n" + url
+                if notify:
+                    await bot.send_message(chat_id=MY_CHAT_ID, text=msg)
+                watch_list[url]["current_price"] = new_price
+                save_watchlist(watch_list)
+            except Exception as e:
+                print("檢查價格失敗: " + str(e))
+
 def get_category(text):
     if any(kw in text for kw in ["我叫", "我是", "他叫", "她叫", "家人"]):
         return "人物"
@@ -425,10 +663,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("正在獲取最新真實新聞，請稍等約30秒...")
             await send_news(message)
             return
-
-        # 一般對話
+# 一般對話
         system_prompt = build_system_prompt()
-        full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
+        use_web_search = needs_search(user_text)
+
+        if use_web_search:
+            await message.reply_text("🔍 正在搜尋最新資料...")
+            search_results = web_search(user_text)
+            if search_results:
+                full_prompt = system_prompt + "\n\n以下是最新搜尋結果，請根據這些資料回答：\n" + search_results + "\n\n" + sender_name + " 問：" + user_text
+            else:
+                full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
+        else:
+            full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
+
         reply = gemini_chat(full_prompt)
 
         if is_important(user_text):
@@ -487,7 +735,8 @@ def run_web():
 async def background_tasks():
     await asyncio.gather(
         send_daily_news(),
-        check_reminders()
+        check_reminders(),
+        check_prices()
     )
 
 def main():
