@@ -487,12 +487,12 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_message))
-    print("安尼亞 Bot 已成功啟動！")
-    app.post_init = lambda app: asyncio.gather(
-        asyncio.ensure_future(send_daily_news()),
+    async def on_startup(app):
+        asyncio.ensure_future(send_daily_news())
         asyncio.ensure_future(check_reminders())
-    )
-    app.run_polling()
+
+    print("安尼亞 Bot 已成功啟動！")
+    app.run_polling(on_startup=on_startup)
 
 if __name__ == "__main__":
     main()
