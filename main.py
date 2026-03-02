@@ -94,6 +94,51 @@ def web_search(query):
         print("Google News RSS 失敗: " + str(e))
     return None
 
+def get_weather(city="Edmonton"):
+    """用 Open-Meteo + Geocoding API 抓取全球任何城市天氣"""
+    try:
+        # 先用 geocoding API 查城市座標
+        geo_url = "https://geocoding-api.open-meteo.com/v1/search?name=" + requests.utils.quote(city) + "&count=1&language=en&format=json"
+        geo_res = requests.get(geo_url, timeout=8)
+        geo_data = geo_res.json()
+        if not geo_data.get("results"):
+            return None
+        result_city = geo_data["results"][0]
+        lat = result_city["latitude"]
+        lon = result_city["longitude"]
+        city_name = result_city["name"]
+        country = result_city.get("country", "")
+        # 抓天氣
+        weather_url = "https://api.open-meteo.com/v1/forecast?latitude=" + str(lat) + "&longitude=" + str(lon) + "&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code,apparent_temperature&wind_speed_unit=kmh&timezone=auto"
+        weather_res = requests.get(weather_url, timeout=8)
+        weather_data = weather_res.json()
+        current = weather_data["current"]
+        temp = current["temperature_2m"]
+        feels_like = current["apparent_temperature"]
+        humidity = current["relative_humidity_2m"]
+        wind = current["wind_speed_10m"]
+        code = current["weather_code"]
+        weather_desc = {
+            0: "晴天", 1: "大致晴朗", 2: "間多雲", 3: "陰天",
+            45: "有霧", 48: "霧凇",
+            51: "毛毛雨", 53: "中度毛毛雨", 55: "大毛毛雨",
+            61: "小雨", 63: "中雨", 65: "大雨",
+            71: "小雪", 73: "中雪", 75: "大雪", 77: "雪粒",
+            80: "陣雨", 81: "中度陣雨", 82: "大陣雨",
+            85: "陣雪", 86: "大陣雪",
+            95: "雷暴", 96: "雷暴伴冰雹", 99: "大雷暴"
+        }
+        desc = weather_desc.get(code, "未知")
+        result = city_name + "，" + country + " 現時天氣\n"
+        result += "天氣：" + desc + "\n"
+        result += "氣溫：" + str(temp) + "°C（體感 " + str(feels_like) + "°C）\n"
+        result += "濕度：" + str(humidity) + "%\n"
+        result += "風速：" + str(wind) + " km/h"
+        return result
+    except Exception as e:
+        print("天氣抓取失敗: " + str(e))
+        return None
+
 def needs_search(text):
     simple_patterns = ["今日是", "今天是", "星期幾", "你好", "在嗎", "在唔在", "是星期"]
     if any(p in text for p in simple_patterns):
@@ -342,7 +387,6 @@ def gemini_chat(prompt):
     except Exception as e:
         return "錯誤：" + str(e)
 
-
 def build_system_prompt():
     人物 = memory_db.get_by_category("人物")
     喜好 = memory_db.get_by_category("喜好")
@@ -473,6 +517,8 @@ async def send_news(target, bot=None):
     await send_chunk(canada_news)
     await asyncio.sleep(2)
     await send_chunk(alberta_news)
+
+
 
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
@@ -681,11 +727,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if use_web_search:
             await message.reply_text("🔍 正在搜尋最新資料...")
-            search_results = web_search(user_text)
-            if search_results:
-                full_prompt = system_prompt + "\n\n以下是最新搜尋結果，請根據這些資料回答：\n" + search_results + "\n\n" + sender_name + " 問：" + user_text
+            # 天氣查詢直接用天氣 API
+            weather_keywords = ["天氣", "氣溫", "溫度", "預報", "下雨", "下雪"]
+            if any(kw in user_text for kw in weather_keywords):
+                # 用 Gemini 提取城市名
+                city_prompt = "從以下問題提取城市名稱，只回傳城市英文名稱，不要其他文字。如果沒有提到城市就回傳 Edmonton。\n問題：" + user_text
+                city = gemini_chat(city_prompt).strip().split("\n")[0].strip()
+                if not city or len(city) > 30:
+                    city = "Edmonton"
+                print("天氣查詢城市: " + city)
+                weather_data = get_weather(city)
+                if weather_data:
+                    full_prompt = system_prompt + "\n\n以下是實時天氣數據：\n" + weather_data + "\n\n請用這個數據回答 " + sender_name + " 的問題：" + user_text
+                else:
+                    full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
             else:
-                full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
+                search_results = web_search(user_text)
+                if search_results:
+                    full_prompt = system_prompt + "\n\n以下是最新搜尋結果，請根據這些資料回答：\n" + search_results + "\n\n" + sender_name + " 問：" + user_text
+                else:
+                    full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
         else:
             full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
 
