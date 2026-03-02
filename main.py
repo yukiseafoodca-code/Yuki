@@ -518,8 +518,6 @@ async def send_news(target, bot=None):
     await asyncio.sleep(2)
     await send_chunk(alberta_news)
 
-
-
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     memories = memory_db.get_all_memory()
     if not memories:
@@ -730,15 +728,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 天氣查詢直接用天氣 API
             weather_keywords = ["天氣", "氣溫", "溫度", "預報", "下雨", "下雪"]
             if any(kw in user_text for kw in weather_keywords):
-                # 用 Gemini 提取城市名
-                city_prompt = "從以下問題提取城市名稱，只回傳城市英文名稱，不要其他文字。如果沒有提到城市就回傳 Edmonton。\n問題：" + user_text
-                city = gemini_chat(city_prompt).strip().split("\n")[0].strip()
-                if not city or len(city) > 30:
-                    city = "Edmonton"
-                print("天氣查詢城市: " + city)
+                # 直接從問題提取城市名，不用 Gemini
+                city = "Edmonton"
+                city_map = {
+                    "香港": "Hong Kong", "東京": "Tokyo", "大阪": "Osaka",
+                    "上海": "Shanghai", "北京": "Beijing", "台北": "Taipei",
+                    "首爾": "Seoul", "新加坡": "Singapore", "曼谷": "Bangkok",
+                    "倫敦": "London", "巴黎": "Paris", "紐約": "New York",
+                    "洛杉磯": "Los Angeles", "溫哥華": "Vancouver",
+                    "多倫多": "Toronto", "卡加利": "Calgary", "愛城": "Edmonton",
+                    "蒙特利爾": "Montreal", "渥太華": "Ottawa",
+                }
+                for zh, en in city_map.items():
+                    if zh in user_text:
+                        city = en
+                        break
+                # 英文城市名直接提取
+                import re as re2
+                eng_match = re2.search(r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*", user_text)
+                if eng_match and city == "Edmonton":
+                    city = eng_match.group(0)
                 weather_data = get_weather(city)
                 if weather_data:
-                    full_prompt = system_prompt + "\n\n以下是實時天氣數據：\n" + weather_data + "\n\n請用這個數據回答 " + sender_name + " 的問題：" + user_text
+                    await message.reply_text(weather_data)
+                    return
                 else:
                     full_prompt = system_prompt + "\n\n" + sender_name + " 說：" + user_text
             else:
