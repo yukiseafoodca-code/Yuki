@@ -473,8 +473,15 @@ def run_web():
     server = HTTPServer(("0.0.0.0", port), Handler)
     server.serve_forever()
 
+async def background_tasks():
+    await asyncio.gather(
+        send_daily_news(),
+        check_reminders()
+    )
+
 def main():
     threading.Thread(target=run_web, daemon=True).start()
+    threading.Thread(target=lambda: asyncio.run(background_tasks()), daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("forget", cmd_forget))
@@ -487,12 +494,8 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_message))
-    async def on_startup(app):
-        asyncio.ensure_future(send_daily_news())
-        asyncio.ensure_future(check_reminders())
-
     print("安尼亞 Bot 已成功啟動！")
-    app.run_polling(on_startup=on_startup)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
