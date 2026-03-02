@@ -109,6 +109,24 @@ def needs_search(text):
     return any(kw in text for kw in search_triggers)
 
 
+def load_watchlist():
+    """從檔案載入監控清單"""
+    try:
+        if os.path.exists("watchlist.json"):
+            with open("watchlist.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+    except:
+        pass
+    return {}
+
+def save_watchlist(watchlist):
+    """儲存監控清單到檔案"""
+    try:
+        with open("watchlist.json", "w", encoding="utf-8") as f:
+            json.dump(watchlist, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print("儲存監控清單失敗: " + str(e))
+
 def fetch_price(url):
     """抓取網頁價格"""
     headers = {
@@ -182,14 +200,6 @@ def get_page_title(url):
     except:
         pass
     return url[:50]
-
-def save_watchlist(watchlist):
-    """儲存監控清單到檔案"""
-    try:
-        with open("watchlist.json", "w", encoding="utf-8") as f:
-            json.dump(watchlist, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print("儲存監控清單失敗: " + str(e))
 
 # 全域監控清單
 watch_list = load_watchlist()
@@ -331,6 +341,7 @@ def gemini_chat(prompt):
         return "安尼亞太忙了，請等60秒再試"
     except Exception as e:
         return "錯誤：" + str(e)
+
 
 def build_system_prompt():
     人物 = memory_db.get_by_category("人物")
@@ -663,7 +674,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await message.reply_text("正在獲取最新真實新聞，請稍等約30秒...")
             await send_news(message)
             return
-# 一般對話
+
+        # 一般對話
         system_prompt = build_system_prompt()
         use_web_search = needs_search(user_text)
 
