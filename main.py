@@ -141,7 +141,8 @@ def parse_rss_today(url, count=5):
             except Exception:
                 is_today = True  # 無法解析日期就保留
             if is_today and title:
-                articles.append({"title": title, "description": desc})
+                link = item.findtext("link") or ""
+                articles.append({"title": title, "description": desc, "link": link})
             if len(articles) >= count:
                 break
         # 如果今日新聞不足，補充最新幾條
@@ -150,8 +151,9 @@ def parse_rss_today(url, count=5):
                 title = item.findtext("title") or ""
                 desc = item.findtext("description") or ""
                 desc = re.sub(r"<[^>]+>", "", desc).strip()
-                if title and {"title": title, "description": desc} not in articles:
-                    articles.append({"title": title, "description": desc})
+                link = item.findtext("link") or ""
+                if title and {"title": title, "description": desc, "link": link} not in articles:
+                    articles.append({"title": title, "description": desc, "link": link})
                 if len(articles) >= count:
                     break
         return articles[:count]
@@ -170,7 +172,16 @@ def format_news(articles, section_name):
     prompt += "規則：只翻譯原文，不添加任何原文沒有的內容，不用**或##符號。\n\n"
     prompt += news_text
     translated = gemini_chat(prompt)
-    return section_name + "\n\n" + translated
+    # 把連結加回翻譯後的新聞
+    lines = translated.strip().split("\n\n")
+    result = section_name + "\n\n"
+    for i, article in enumerate(articles):
+        if i < len(lines):
+            result += lines[i].strip()
+        if article.get("link"):
+            result += "\n" + article["link"]
+        result += "\n\n"
+    return result.strip()
 
 def fetch_real_news():
     try:
